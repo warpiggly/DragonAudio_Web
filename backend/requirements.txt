@@ -1,0 +1,23 @@
+# Backend
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+python-dotenv
+
+# Autenticación
+pydantic
+pyjwt
+bcrypt
+
+# Procesamiento de audio
+numpy
+scipy
+librosa
+
+# Data science
+pandas
+scikit-learn
+
+# Utilidades
+requests

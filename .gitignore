@@ -1,0 +1,34 @@
+# ---------- Python / Backend ----------
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+backend/.env
+backend/.env.local
+*.sqlite
+*.db
+
+# ---------- Node / Frontend ----------
+audio-frontend/node_modules/
+audio-frontend/build/
+audio-frontend/coverage/
+audio-frontend/.env
+audio-frontend/.env.local
+audio-frontend/.env.development.local
+audio-frontend/.env.test.local
+audio-frontend/.env.production.local
+audio-frontend/npm-debug.log*
+audio-frontend/yarn-debug.log*
+audio-frontend/yarn-error.log*
+
+# ---------- Editores / SO ----------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------- Claude / herramientas ----------
+.claude/
