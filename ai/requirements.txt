@@ -1,0 +1,27 @@
+# Dependencias del modulo de IA (entrenamiento e investigacion).
+# El backend usa su propio requirements.txt mas liviano.
+
+# --- core numerico ---
+numpy>=1.26,<3.0
+pandas>=2.2,<3.0
+scipy>=1.13,<2.0
+
+# --- ML clasico ---
+scikit-learn>=1.4,<2.0
+joblib>=1.3,<2.0
+
+# --- exportacion de modelos para servir desde el backend ---
+# onnx, onnxruntime  (descomenta cuando exportes modelos a ONNX)
+
+# --- IO ---
+openpyxl>=3.1,<4.0           # excel writer usado por build_dataset.py
+
+# --- exploracion ---
+jupyterlab>=4.0,<5.0
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+
+# --- opcional (descomenta segun necesites) ---
+# umap-learn>=0.5
+# torch>=2.2
+# tqdm>=4.66
