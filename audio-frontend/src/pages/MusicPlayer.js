@@ -27,12 +27,6 @@ const DEFAULTS = {
 };
 
 export default function MusicPlayer() {
-  // --- Fuentes externas embebidas (YouTube / SoundCloud) ---
-  const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [videoId, setVideoId] = useState('');
-  const [soundcloudUrl, setSoundcloudUrl] = useState('');
-  const [showSoundcloud, setShowSoundcloud] = useState(false);
-
   // --- Parámetros del procesador DSP (controlan los nodos Web Audio en vivo) ---
   const [eqGains, setEqGains] = useState(DEFAULTS.eqGains);              // ganancia dB por banda
   const [compThreshold, setCompThreshold] = useState(DEFAULTS.compThreshold);
@@ -56,21 +50,7 @@ export default function MusicPlayer() {
   const analyserRef = useRef(null);     // AnalyserNode: FFT para el visualizador
   const canvasRef = useRef(null);       // <canvas> donde se dibujan las barras
   const rafRef = useRef(null);          // id de requestAnimationFrame (loop de dibujo)
-
-  // Extrae el ID de 11 caracteres de un link de YouTube (formatos youtu.be/… y v=…).
-  const extractYoutubeId = (url) => {
-    const match = url.match(/(?:youtu\.be\/|v=)([a-zA-Z0-9_-]{11})/);
-    return match ? match[1] : null;
-  };
-
-  const handleYoutube = () => {
-    const id = extractYoutubeId(youtubeUrl);
-    if (id) setVideoId(id);
-  };
-
-  const handleSoundcloud = () => {
-    if (soundcloudUrl) setShowSoundcloud(true);
-  };
+  const bgRef = useRef(null);           // contenedor del fondo: recibe el "latido" (--beat) por CSS var
 
   // Ancho estéreo por mezcla M/S simplificada:
   //   newL = L*(1+w)/2 + R*(1-w)/2
@@ -114,6 +94,10 @@ export default function MusicPlayer() {
     const bassEnd = Math.max(1, Math.floor(bins * 0.1));
     for (let i = 0; i < bassEnd; i++) bass += freq[i];
     bass = bass / (bassEnd * 255); // normalizado 0..1
+
+    // El fondo "late" con la música: pasamos la energía de graves como variable CSS.
+    // Las brasas y el brillo del fondo la usan para reaccionar al ritmo.
+    if (bgRef.current) bgRef.current.style.setProperty('--beat', bass.toFixed(3));
 
     // Trail: en lugar de borrar el frame entero, pintamos una capa semitransparente
     // encima. Los píxeles viejos se desvanecen gradualmente → sensación de "respiración".
@@ -362,6 +346,8 @@ export default function MusicPlayer() {
     masterGainRef.current = null;
     analyserRef.current = null;
 
+    if (bgRef.current) bgRef.current.style.setProperty('--beat', '0');
+
     const canvas = canvasRef.current;
     if (canvas) {
       const cctx = canvas.getContext('2d');
@@ -401,23 +387,23 @@ export default function MusicPlayer() {
 
   // Estilo del icono ↺ que aparece junto a cada slider.
   const resetBtnStyle = {
-    background: 'transparent',
-    border: '1px solid #ccc',
+    background: 'rgba(232,195,106,0.08)',
+    border: '1px solid rgba(232,195,106,0.35)',
     borderRadius: 4,
     padding: '0 6px',
     fontSize: 12,
     cursor: 'pointer',
-    color: '#666',
+    color: '#e8c36a',
     lineHeight: '18px',
   };
 
   // Slider reutilizable. `defaultValue` es a dónde vuelve al pulsar el botón ↺.
   const slider = (label, value, setter, min, max, step = 1, unit = '', defaultValue = 0) => (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+      <label style={{ fontSize: 13, color: '#f0e6d2', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <span>{label}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ color: '#555', minWidth: 48, textAlign: 'right' }}>{value}{unit}</span>
+          <span style={{ color: '#e8c36a', minWidth: 48, textAlign: 'right', fontFamily: 'monospace' }}>{value}{unit}</span>
           <button
             type="button"
             onClick={() => setter(defaultValue)}
@@ -434,71 +420,166 @@ export default function MusicPlayer() {
     </div>
   );
 
-  const sectionStyle = { background: '#fff', padding: 14, borderRadius: 8, marginBottom: 12, border: '1px solid #ddd' };
-  const sectionTitle = { margin: '0 0 10px 0', fontSize: 14, color: '#333', textTransform: 'uppercase', letterSpacing: 1 };
+  const sectionStyle = {
+    background: 'rgba(28,10,12,0.55)',
+    backdropFilter: 'blur(6px)',
+    WebkitBackdropFilter: 'blur(6px)',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+    border: '1px solid rgba(232,195,106,0.22)',
+    boxShadow: '0 0 18px rgba(120,10,20,0.25), inset 0 0 30px rgba(0,0,0,0.4)',
+  };
+  const sectionTitle = { margin: '0 0 10px 0', fontSize: 14, color: '#e8c36a', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 700 };
 
   return (
-    <div style={{ maxWidth: 800, margin: '30px auto', padding: 20 }}>
-      <h1>🎵 Reproductor de Música</h1>
+    <div className="dragon-bg" ref={bgRef} style={{ '--beat': 0 }}>
+      {/* Animaciones + capas decorativas del tema "dragón" (estilo cultura china). */}
+      <style>{`
+        @keyframes dragonShift {
+          0%, 100% { background-position: 0% 0%, 100% 100%, 0% 50%; }
+          50%      { background-position: 100% 100%, 0% 0%, 100% 50%; }
+        }
+        @keyframes emberFloat {
+          0%   { transform: translateY(0) scale(1);   opacity: 0; }
+          15%  { opacity: 0.9; }
+          100% { transform: translateY(-120vh) scale(0.4); opacity: 0; }
+        }
+        @keyframes dragonSway {
+          0%, 100% { transform: translateX(-50%) rotate(-3deg); }
+          50%      { transform: translateX(-50%) rotate(3deg); }
+        }
+        @keyframes titleGlow {
+          0%, 100% { text-shadow: 0 0 10px rgba(232,195,106,0.5), 0 0 22px rgba(180,30,0,0.4); }
+          50%      { text-shadow: 0 0 18px rgba(255,180,60,0.9), 0 0 40px rgba(220,40,0,0.7); }
+        }
+        .dragon-bg {
+          min-height: 100vh;
+          padding: 1px 0 40px;
+          position: relative;
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 20% 15%, rgba(120,12,20,0.55) 0%, transparent 45%),
+            radial-gradient(circle at 82% 80%, rgba(60,6,10,0.6) 0%, transparent 50%),
+            linear-gradient(135deg, #0a0405 0%, #18080a 50%, #0a0405 100%);
+          background-size: 200% 200%, 200% 200%, 200% 200%;
+          animation: dragonShift 22s ease-in-out infinite;
+          font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+        /* 龙 — dragón gigante, marca de agua que se mece muy lento detrás de todo. */
+        .dragon-watermark {
+          position: absolute;
+          top: 6%;
+          left: 50%;
+          transform: translateX(-50%);
+          font-size: 46vw;
+          line-height: 1;
+          color: rgba(232,195,106,0.04);
+          pointer-events: none;
+          user-select: none;
+          z-index: 0;
+          animation: dragonSway 16s ease-in-out infinite;
+        }
+        /* Brasas/chispas ascendentes (como las que lanza el dragón). */
+        .ember {
+          position: absolute;
+          bottom: -10px;
+          width: 4px; height: 4px;
+          border-radius: 50%;
+          background: radial-gradient(circle, #ffd27a 0%, #ff5a00 60%, transparent 70%);
+          box-shadow: 0 0 8px rgba(255,120,0,0.8);
+          pointer-events: none;
+          z-index: 1;
+          animation: emberFloat linear infinite;
+          /* Brillan más fuerte cuanto más pegan los graves (--beat 0..1). */
+          filter: brightness(calc(0.7 + var(--beat, 0) * 2.2));
+        }
+        /* Resplandor central que late con el bajo: crece y se enciende al ritmo. */
+        .dragon-pulse {
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          pointer-events: none;
+          z-index: 1;
+          background: radial-gradient(circle at 50% 42%,
+            rgba(255,90,0,0.55) 0%,
+            rgba(180,20,0,0.28) 28%,
+            transparent 60%);
+          opacity: calc(var(--beat, 0) * 0.9);
+          transform: scale(calc(1 + var(--beat, 0) * 0.5));
+          transition: opacity 90ms linear, transform 90ms linear;
+        }
+        /* El dragón de fondo también se enciende suavemente con el ritmo. */
+        .dragon-watermark {
+          color: rgba(232,195,106, calc(0.04 + var(--beat, 0) * 0.12)) !important;
+        }
+        /* El título conserva su brillo base (titleGlow) y además PULSA con el bajo:
+           drop-shadow no choca con la animación de text-shadow, así se suman. */
+        .dragon-title {
+          filter: drop-shadow(0 0 calc(var(--beat, 0) * 34px) rgba(255,150,30, calc(var(--beat, 0) * 0.95)));
+          transform: scale(calc(1 + var(--beat, 0) * 0.05));
+          transition: filter 90ms linear, transform 90ms linear;
+        }
+        /* El subtítulo rojo 龙之音 también late con el ritmo. */
+        .dragon-sub {
+          filter: drop-shadow(0 0 calc(var(--beat, 0) * 24px) rgba(200,30,20, calc(var(--beat, 0) * 0.95)));
+          transform: scale(calc(1 + var(--beat, 0) * 0.04));
+          transition: filter 90ms linear, transform 90ms linear;
+        }
+        .dragon-content { position: relative; z-index: 2; max-width: 820px; margin: 0 auto; padding: 0 16px; }
+      `}</style>
 
-      {/* --- YouTube: pega un link y carga el reproductor oficial en un iframe. --- */}
-      <div style={{ marginBottom: 30 }}>
-        <h2>YouTube</h2>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <input
-            placeholder="Pega link de YouTube"
-            value={youtubeUrl}
-            onChange={e => setYoutubeUrl(e.target.value)}
-            style={{ flex: 1, padding: 10 }}
-          />
-          <button onClick={handleYoutube} style={{ padding: 10 }}>
-            Cargar
-          </button>
-        </div>
-        {videoId && (
-          <iframe
-            width="100%"
-            height="400"
-            src={`https://www.youtube.com/embed/${videoId}`}
-            title="YouTube"
-            frameBorder="0"
-            allow="autoplay; encrypted-media"
-            allowFullScreen
-            style={{ marginTop: 10, borderRadius: 10 }}
-          />
-        )}
-      </div>
+      {/* Dragón de fondo (祥 atmósfera) */}
+      <div className="dragon-watermark">龙</div>
 
-      {/* --- SoundCloud: mismo flujo que YouTube usando su widget oficial. --- */}
-      <div style={{ marginBottom: 30 }}>
-        <h2>SoundCloud</h2>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <input
-            placeholder="Pega link de SoundCloud"
-            value={soundcloudUrl}
-            onChange={e => setSoundcloudUrl(e.target.value)}
-            style={{ flex: 1, padding: 10 }}
-          />
-          <button onClick={handleSoundcloud} style={{ padding: 10 }}>
-            Cargar
-          </button>
-        </div>
-        {showSoundcloud && (
-          <iframe
-            width="100%"
-            height="166"
-            scrolling="no"
-            frameBorder="no"
-            allow="autoplay"
-            src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(soundcloudUrl)}&color=%23ff5500&auto_play=false`}
-            style={{ marginTop: 10, borderRadius: 10 }}
-          />
-        )}
-      </div>
+      {/* Resplandor que late con el bajo de la música */}
+      <div className="dragon-pulse" />
+
+      {/* Lluvia de brasas: cada chispa con posición/tamaño/tiempo distintos. */}
+      {[...Array(14)].map((_, i) => (
+        <span
+          key={i}
+          className="ember"
+          style={{
+            left: `${(i * 7 + 4) % 100}%`,
+            width: `${2 + (i % 4)}px`,
+            height: `${2 + (i % 4)}px`,
+            animationDuration: `${7 + (i % 5) * 2}s`,
+            animationDelay: `${(i % 6) * 1.7}s`,
+          }}
+        />
+      ))}
+
+      <div className="dragon-content">
+        {/* Encabezado */}
+        <header style={{ textAlign: 'center', padding: '34px 0 22px' }}>
+          <h1 className="dragon-title" style={{
+            margin: 0,
+            fontSize: 42,
+            letterSpacing: 4,
+            color: '#e8c36a',
+            animation: 'titleGlow 4s ease-in-out infinite',
+          }}>
+            🐉 DRAGON AUDIO
+          </h1>
+          <p className="dragon-sub" style={{ margin: '6px 0 0', fontSize: 18, color: '#c0392b', letterSpacing: 8, fontWeight: 700 }}>
+            龙 之 音
+          </p>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#b89b6a', letterSpacing: 1 }}>
+            El sonido del dragón · Procesador de audio en vivo
+          </p>
+        </header>
 
       {/* --- Procesador DSP: EQ + compresor + estéreo + volumen master. --- */}
-      <div style={{ background: '#f0f0f0', padding: 20, borderRadius: 10 }}>
-        <h2 style={{ marginTop: 0 }}>🎛️ Procesador de Audio</h2>
+      <div style={{
+        background: 'rgba(12,5,6,0.5)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+        padding: 20,
+        borderRadius: 14,
+        border: '1px solid rgba(232,195,106,0.25)',
+        boxShadow: '0 0 40px rgba(120,10,20,0.35)',
+      }}>
+        <h2 style={{ marginTop: 0, color: '#e8c36a', letterSpacing: 1 }}>🎛️ Procesador de Audio</h2>
 
         {/* Visualizador "dragón" — llamas espejadas + waveform + halo de brasas */}
         <canvas
@@ -667,21 +748,20 @@ export default function MusicPlayer() {
               ...sectionStyle,
               gridColumn: '1 / -1',
               borderColor:
-                volume > 300 ? '#dc3545' : volume > 100 ? '#f0ad4e' : '#ddd',
-              background:
-                volume > 300 ? '#fff5f5' : volume > 100 ? '#fffaf0' : '#fff',
+                volume > 300 ? '#dc3545' : volume > 100 ? '#f0ad4e' : 'rgba(232,195,106,0.22)',
             }}
           >
             <h3 style={sectionTitle}>Volumen master</h3>
             <div style={{ marginBottom: 12 }}>
-              <label style={{ fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <label style={{ fontSize: 13, color: '#f0e6d2', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <span>Volumen (100 = original · 600 = amplificado x6)</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span
                     style={{
                       color:
-                        volume > 300 ? '#dc3545' : volume > 100 ? '#c97a00' : '#555',
+                        volume > 300 ? '#ff6b6b' : volume > 100 ? '#f0ad4e' : '#e8c36a',
                       fontWeight: volume > 100 ? 'bold' : 'normal',
+                      fontFamily: 'monospace',
                     }}
                   >
                     {volume}
@@ -724,15 +804,16 @@ export default function MusicPlayer() {
           </div>
         </div>
 
-        <ul style={{ fontSize: 12, color: '#666', paddingLeft: 18, marginTop: 12 }}>
+        <ul style={{ fontSize: 12, color: '#b89b6a', paddingLeft: 18, marginTop: 12 }}>
           <li>Funciona en Chrome, Edge y Brave. No en Firefox ni Safari.</li>
           <li>
-            En el diálogo elige <b>"Pestaña de Chrome"</b>, selecciona esta misma pestaña y activa <b>"Compartir audio de la pestaña"</b>.
+            En el diálogo elige <b style={{ color: '#e8c36a' }}>"Pestaña de Chrome"</b>, selecciona la pestaña con tu música y activa <b style={{ color: '#e8c36a' }}>"Compartir audio de la pestaña"</b>.
           </li>
           <li>
-            Baja el volumen del video de YouTube de arriba — el procesador reproduce su propia versión filtrada.
+            El dragón reproduce su propia versión filtrada del audio: baja el volumen de la pestaña original para no oír las dos a la vez.
           </li>
         </ul>
+      </div>
       </div>
     </div>
   );
