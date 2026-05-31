@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 // ---- Configuración del EQ gráfico (9 bandas ISO 1-octava) ----
 // Cada índice = 1 BiquadFilter encadenado en serie sobre la señal.
@@ -27,6 +28,17 @@ const DEFAULTS = {
 };
 
 export default function MusicPlayer() {
+  const navigate = useNavigate();
+  const [visualMode, setVisualMode] = useState(
+    () => localStorage.getItem('dragonVisualMode') || 'full'
+  );
+
+  const toggleVisualMode = () => {
+    const next = visualMode === 'full' ? 'simple' : 'full';
+    setVisualMode(next);
+    localStorage.setItem('dragonVisualMode', next);
+  };
+
   // --- Parámetros del procesador DSP (controlan los nodos Web Audio en vivo) ---
   const [eqGains, setEqGains] = useState(DEFAULTS.eqGains);              // ganancia dB por banda
   const [compThreshold, setCompThreshold] = useState(DEFAULTS.compThreshold);
@@ -319,7 +331,9 @@ export default function MusicPlayer() {
       audioTracks[0].addEventListener('ended', () => stopEqualizer());
 
       setEqActive(true);
-      rafRef.current = requestAnimationFrame(drawVisualizer);
+      if (visualMode === 'full') {
+        rafRef.current = requestAnimationFrame(drawVisualizer);
+      }
     } catch (err) {
       setEqError('No se pudo iniciar el ecualizador: ' + err.message);
     }
@@ -375,6 +389,27 @@ export default function MusicPlayer() {
       masterGainRef.current.gain.setTargetAtTime(volume / 100, audioCtxRef.current.currentTime, 0.02);
     }
   }, [volume]);
+
+  // Redirige al test si no se ha calibrado.
+  useEffect(() => {
+    if (!localStorage.getItem('dragonTestCompleted')) {
+      navigate('/test');
+    }
+  }, [navigate]);
+
+  // Arranca o pausa el visualizador canvas cuando cambia el modo visual.
+  useEffect(() => {
+    if (!eqActive) return;
+    if (visualMode === 'simple') {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    } else if (!rafRef.current) {
+      rafRef.current = requestAnimationFrame(drawVisualizer);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visualMode, eqActive]);
 
   // Cleanup al desmontar: corta la animación, libera el stream y cierra el AudioContext.
   useEffect(() => {
@@ -433,8 +468,7 @@ export default function MusicPlayer() {
   const sectionTitle = { margin: '0 0 10px 0', fontSize: 14, color: '#e8c36a', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 700 };
 
   return (
-    <div className="dragon-bg" ref={bgRef} style={{ '--beat': 0 }}>
-      {/* Animaciones + capas decorativas del tema "dragón" (estilo cultura china). */}
+    <div className={visualMode === 'full' ? 'dragon-bg' : 'dragon-simple'} ref={bgRef} style={{ '--beat': 0 }}>
       <style>{`
         @keyframes dragonShift {
           0%, 100% { background-position: 0% 0%, 100% 100%, 0% 50%; }
@@ -526,28 +560,47 @@ export default function MusicPlayer() {
           transition: filter 90ms linear, transform 90ms linear;
         }
         .dragon-content { position: relative; z-index: 2; max-width: 820px; margin: 0 auto; padding: 0 16px; }
+
+        /* ── Modo simple: sin animaciones, sin partículas, bajo consumo ── */
+        .dragon-simple {
+          min-height: 100vh;
+          padding: 1px 0 40px;
+          background: #0d0507;
+          background-image:
+            radial-gradient(circle at 50% 20%, rgba(100,10,16,0.45) 0%, transparent 55%),
+            radial-gradient(circle at 80% 85%, rgba(40,5,8,0.5) 0%, transparent 45%);
+          font-family: 'Segoe UI', system-ui, sans-serif;
+          color: #f0e6d2;
+        }
+        .dragon-simple .dragon-content { position: relative; z-index: 2; max-width: 820px; margin: 0 auto; padding: 0 16px; }
+        .dragon-simple .dragon-title { animation: none !important; filter: none !important; transform: none !important; }
+        .dragon-simple .dragon-sub   { animation: none !important; filter: none !important; transform: none !important; }
       `}</style>
 
-      {/* Dragón de fondo (祥 atmósfera) */}
-      <div className="dragon-watermark">龙</div>
-
-      {/* Resplandor que late con el bajo de la música */}
-      <div className="dragon-pulse" />
-
-      {/* Lluvia de brasas: cada chispa con posición/tamaño/tiempo distintos. */}
-      {[...Array(14)].map((_, i) => (
-        <span
-          key={i}
-          className="ember"
-          style={{
-            left: `${(i * 7 + 4) % 100}%`,
-            width: `${2 + (i % 4)}px`,
-            height: `${2 + (i % 4)}px`,
-            animationDuration: `${7 + (i % 5) * 2}s`,
-            animationDelay: `${(i % 6) * 1.7}s`,
-          }}
-        />
-      ))}
+      {visualMode === 'full' && (
+        <>
+          <div className="dragon-watermark">龙</div>
+          <div className="dragon-pulse" />
+          {[...Array(14)].map((_, i) => (
+            <span key={i} className="ember" style={{
+              left: `${(i * 7 + 4) % 100}%`,
+              width:  `${2 + (i % 4)}px`,
+              height: `${2 + (i % 4)}px`,
+              animationDuration: `${7 + (i % 5) * 2}s`,
+              animationDelay:    `${(i % 6) * 1.7}s`,
+            }} />
+          ))}
+        </>
+      )}
+      {visualMode === 'simple' && (
+        <div style={{
+          position: 'absolute', top: '8%', left: '50%',
+          transform: 'translateX(-50%)',
+          fontSize: '38vw', lineHeight: 1,
+          color: 'rgba(232,195,106,0.03)',
+          pointerEvents: 'none', userSelect: 'none', zIndex: 0,
+        }}>龙</div>
+      )}
 
       <div className="dragon-content">
         {/* Encabezado */}
@@ -567,6 +620,41 @@ export default function MusicPlayer() {
           <p style={{ margin: '4px 0 0', fontSize: 13, color: '#b89b6a', letterSpacing: 1 }}>
             El sonido del dragón · Procesador de audio en vivo
           </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+            <button
+              onClick={toggleVisualMode}
+              style={{
+                padding: '6px 18px',
+                background: visualMode === 'full' ? 'rgba(192,57,43,0.18)' : 'rgba(232,195,106,0.1)',
+                border: `1px solid ${visualMode === 'full' ? 'rgba(192,57,43,0.45)' : 'rgba(232,195,106,0.35)'}`,
+                borderRadius: 20,
+                color: visualMode === 'full' ? '#e88a6a' : '#e8c36a',
+                fontSize: 12,
+                cursor: 'pointer',
+                letterSpacing: 0.5,
+                transition: 'all 0.2s',
+                fontWeight: 600,
+              }}
+            >
+              {visualMode === 'full' ? '⚡ Modo Simple' : '🐉 Modo Dragón'}
+            </button>
+            <button
+              onClick={() => { localStorage.removeItem('dragonTestCompleted'); navigate('/test'); }}
+              style={{
+                padding: '6px 18px',
+                background: 'rgba(28,10,12,0.55)',
+                border: '1px solid rgba(232,195,106,0.2)',
+                borderRadius: 20,
+                color: '#8a7a60',
+                fontSize: 12,
+                cursor: 'pointer',
+                letterSpacing: 0.5,
+                transition: 'all 0.2s',
+              }}
+            >
+              🔬 Recalibrar Parlantes
+            </button>
+          </div>
         </header>
 
       {/* --- Procesador DSP: EQ + compresor + estéreo + volumen master. --- */}
@@ -581,13 +669,27 @@ export default function MusicPlayer() {
       }}>
         <h2 style={{ marginTop: 0, color: '#e8c36a', letterSpacing: 1 }}>🎛️ Procesador de Audio</h2>
 
-        {/* Visualizador "dragón" — llamas espejadas + waveform + halo de brasas */}
+        {/* Visualizador: canvas animado en modo full, indicador estático en modo simple */}
         <canvas
           ref={canvasRef}
           width={760}
           height={200}
-          style={{ width: '100%', height: 200, borderRadius: 8, background: '#0c0503', marginBottom: 12, display: 'block' }}
+          style={{
+            width: '100%', height: 200, borderRadius: 8,
+            background: '#0c0503', marginBottom: 12, display: visualMode === 'full' ? 'block' : 'none',
+          }}
         />
+        {visualMode === 'simple' && (
+          <div style={{
+            height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(28,10,12,0.5)', borderRadius: 8, marginBottom: 12,
+            border: '1px solid rgba(232,195,106,0.12)',
+          }}>
+            <span style={{ color: eqActive ? '#e8c36a' : '#4a3520', fontSize: 14, fontWeight: 600 }}>
+              {eqActive ? '🎵 Procesando audio — modo optimizado activo' : '龙  Activa el procesador para comenzar'}
+            </span>
+          </div>
+        )}
 
         {/* Botón principal: pide permiso de captura o detiene el procesador. */}
         <div style={{ marginBottom: 15 }}>
