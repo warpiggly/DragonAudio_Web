@@ -51,6 +51,23 @@ export default function MusicPlayer() {
   const [width, setWidth] = useState(DEFAULTS.width);                    // 0 mono · 1 normal · 2 amplio
   const [volume, setVolume] = useState(DEFAULTS.volume);                 // 0..600 % (master gain)
 
+  // --- Solo / Mute por efecto ---
+  // mute = el efecto pasa a neutro (no colorea la señal); para el volumen = silencio.
+  // solo = si hay AL MENOS un efecto en solo, solo esos quedan activos; el resto va a neutro.
+  // El volumen master nunca se silencia por el solo de otro (sigue siendo el nivel de salida),
+  // pero sí puede mutearse aparte o ponerse en solo para escuchar la señal sin EQ/comp/estéreo.
+  const [muted, setMuted] = useState({ eq: false, comp: false, stereo: false, volume: false });
+  const [solo, setSolo]   = useState({ eq: false, comp: false, stereo: false, volume: false });
+
+  // Decide si un efecto debe estar aplicando su procesado en este momento.
+  const effectActive = (key) => {
+    const anySolo = solo.eq || solo.comp || solo.stereo || solo.volume;
+    return anySolo ? !!solo[key] : !muted[key];
+  };
+
+  const toggleMute = (key) => setMuted((m) => ({ ...m, [key]: !m[key] }));
+  const toggleSolo = (key) => setSolo((s) => ({ ...s, [key]: !s[key] }));
+
   // --- Estado del propio procesador (activo / errores de captura) ---
   const [eqActive, setEqActive] = useState(false);
   const [eqError, setEqError] = useState('');
@@ -380,20 +397,35 @@ export default function MusicPlayer() {
   // Cada vez que el usuario mueve un slider (o pulsa ↺), propagamos el valor
   // directamente al nodo correspondiente, sin reconstruir la cadena.
   useEffect(() => {
+    const on = effectActive('eq');                 // si está off → curva plana (0 dB)
     eqFiltersRef.current.forEach((f, i) => {
-      if (f) f.gain.value = eqGains[i];
+      if (f) f.gain.value = on ? eqGains[i] : 0;
     });
-  }, [eqGains]);
-  useEffect(() => { if (compressorRef.current) compressorRef.current.threshold.value = compThreshold; }, [compThreshold]);
-  useEffect(() => { if (compressorRef.current) compressorRef.current.ratio.value = compRatio; }, [compRatio]);
-  useEffect(() => { if (pannerRef.current) pannerRef.current.pan.value = pan; }, [pan]);
-  useEffect(() => { applyWidth(width); }, [width]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eqGains, muted, solo]);
+  useEffect(() => {
+    const on = effectActive('comp');               // si está off → threshold 0 / ratio 1 (sin compresión)
+    if (compressorRef.current) {
+      compressorRef.current.threshold.value = on ? compThreshold : 0;
+      compressorRef.current.ratio.value = on ? compRatio : 1;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compThreshold, compRatio, muted, solo]);
+  useEffect(() => {
+    const on = effectActive('stereo');             // si está off → pan centrado y ancho normal
+    if (pannerRef.current) pannerRef.current.pan.value = on ? pan : 0;
+    applyWidth(on ? width : 1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pan, width, muted, solo]);
   useEffect(() => {
     // Rampa exponencial corta (~20 ms) para evitar clicks al saltar de volumen.
+    // El volumen solo se silencia con su propio Mute; el solo de otros efectos no lo apaga.
     if (masterGainRef.current && audioCtxRef.current) {
-      masterGainRef.current.gain.setTargetAtTime(volume / 100, audioCtxRef.current.currentTime, 0.02);
+      const target = muted.volume ? 0 : volume / 100;
+      masterGainRef.current.gain.setTargetAtTime(target, audioCtxRef.current.currentTime, 0.02);
     }
-  }, [volume]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volume, muted]);
 
   // Redirige al test si no se ha calibrado.
   useEffect(() => {
@@ -452,6 +484,59 @@ export default function MusicPlayer() {
     color: '#e8c36a',
     lineHeight: '18px',
   };
+
+  // --- Botones Solo / Mute por efecto ---
+  const toggleBtnBase = {
+    width: 26,
+    height: 22,
+    borderRadius: 5,
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: 'pointer',
+    lineHeight: '20px',
+    padding: 0,
+    transition: 'all 0.15s',
+  };
+  const soloBtnStyle = (active) => ({
+    ...toggleBtnBase,
+    background: active ? '#f0ad4e' : 'rgba(240,173,78,0.10)',
+    border: `1px solid ${active ? '#f0ad4e' : 'rgba(240,173,78,0.4)'}`,
+    color: active ? '#1c0a0c' : '#f0ad4e',
+    boxShadow: active ? '0 0 10px rgba(240,173,78,0.7)' : 'none',
+  });
+  const muteBtnStyle = (active) => ({
+    ...toggleBtnBase,
+    background: active ? '#dc3545' : 'rgba(220,53,69,0.10)',
+    border: `1px solid ${active ? '#dc3545' : 'rgba(220,53,69,0.45)'}`,
+    color: active ? '#fff' : '#ff6b6b',
+    boxShadow: active ? '0 0 10px rgba(220,53,69,0.7)' : 'none',
+  });
+
+  // Par de botones S (solo) / M (mute) para la cabecera de cada efecto.
+  const effectToggles = (key) => (
+    <span style={{ display: 'flex', gap: 6 }}>
+      <button
+        type="button"
+        onClick={() => toggleSolo(key)}
+        title="Solo: escucha únicamente este efecto (omite los demás)"
+        style={soloBtnStyle(solo[key])}
+      >S</button>
+      <button
+        type="button"
+        onClick={() => toggleMute(key)}
+        title="Mute: omite este efecto"
+        style={muteBtnStyle(muted[key])}
+      >M</button>
+    </span>
+  );
+
+  // Cabecera de sección: título + botones Solo/Mute alineados a la derecha.
+  const effectHeader = (title, key) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
+      <h3 style={{ ...sectionTitle, margin: 0 }}>{title}</h3>
+      {effectToggles(key)}
+    </div>
+  );
 
   // Slider reutilizable. `defaultValue` es a dónde vuelve al pulsar el botón ↺.
   const slider = (label, value, setter, min, max, step = 1, unit = '', defaultValue = 0) => (
@@ -749,7 +834,8 @@ export default function MusicPlayer() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {/* EQ gráfico — 9 sliders verticales en fila, estilo ecualizador hardware clásico. */}
           <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
-            <h3 style={sectionTitle}>Ecualizador (9 bandas)</h3>
+            {effectHeader('Ecualizador (9 bandas)', 'eq')}
+            <div style={{ opacity: effectActive('eq') ? 1 : 0.4, transition: 'opacity 0.2s' }}>
             {iaMsg && <p style={{ fontSize: 12, color: '#7bd88f', margin: '0 0 10px' }}>{iaMsg}</p>}
             <div style={{
               display: 'flex',
@@ -847,23 +933,28 @@ export default function MusicPlayer() {
             <p style={{ fontSize: 11, color: '#888', margin: '10px 0 0 0', textAlign: 'center' }}>
               Sube para realzar la banda, baja para atenuarla. Línea central = 0 dB (sin cambio).
             </p>
+            </div>
           </div>
 
           {/* Compresor — control de dinámica (aplasta picos sobre threshold). */}
           <div style={sectionStyle}>
-            <h3 style={sectionTitle}>Compresor</h3>
+            {effectHeader('Compresor', 'comp')}
+            <div style={{ opacity: effectActive('comp') ? 1 : 0.4, transition: 'opacity 0.2s' }}>
             {slider('Threshold', compThreshold, setCompThreshold, -60, 0, 1, ' dB', DEFAULTS.compThreshold)}
             {slider('Ratio', compRatio, setCompRatio, 1, 20, 0.5, ':1', DEFAULTS.compRatio)}
             <p style={{ fontSize: 11, color: '#888', margin: 0 }}>
               Threshold más bajo = comprime más. Ratio alto = aplasta los picos.
             </p>
+            </div>
           </div>
 
           {/* Estéreo — paneo (balance L/R) y ancho de imagen estéreo. */}
           <div style={sectionStyle}>
-            <h3 style={sectionTitle}>Estéreo</h3>
+            {effectHeader('Estéreo', 'stereo')}
+            <div style={{ opacity: effectActive('stereo') ? 1 : 0.4, transition: 'opacity 0.2s' }}>
             {slider('Paneo (L ← → R)', pan, setPan, -1, 1, 0.01, '', DEFAULTS.pan)}
             {slider('Ancho estéreo (0=mono · 1=normal · 2=amplio)', width, setWidth, 0, 2, 0.01, '', DEFAULTS.width)}
+            </div>
           </div>
 
           {/* Volumen master — ganancia final + avisos de seguridad auditiva. */}
@@ -875,7 +966,12 @@ export default function MusicPlayer() {
                 volume > 300 ? '#dc3545' : volume > 100 ? '#f0ad4e' : 'rgba(232,195,106,0.22)',
             }}
           >
-            <h3 style={sectionTitle}>Volumen master</h3>
+            {effectHeader('Volumen master', 'volume')}
+            {muted.volume && (
+              <p style={{ fontSize: 12, color: '#ff6b6b', margin: '0 0 10px', fontWeight: 600 }}>
+                🔇 Silenciado (Mute activo) — no sale audio aunque subas el volumen.
+              </p>
+            )}
             <div style={{ marginBottom: 12 }}>
               <label style={{ fontSize: 13, color: '#f0e6d2', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <span>Volumen (100 = original · 600 = amplificado x6)</span>
