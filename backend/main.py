@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
-from app.models import User, Device, AudioTest
-from app.routes import auth, audio
+from app.models import User, Device, AudioTest, TestSession
+from app.routes import auth, audio, tests
 
 Base.metadata.create_all(bind=engine)
 
@@ -17,6 +17,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(audio.router)
+app.include_router(tests.router)
 
 @app.get("/")
 def home():

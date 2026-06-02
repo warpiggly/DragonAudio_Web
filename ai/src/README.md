@@ -15,7 +15,8 @@ lógica del notebook `EQ_Personalizado.ipynb` a archivos Python ordenados.
 |---|---|---|
 | Celdas IA 1 (Ridge) | [models/score_predictor.py](models/score_predictor.py) | Clase con `fit/predict/evaluate/save/load`. Mismo modelo (Ridge α=100). |
 | Celdas IA 2 (Random Forest) | [models/inverse_eq.py](models/inverse_eq.py) | Clase igual. N.º de filtros configurable (antes fijo en 7). |
-| `umbrales_a_curva` | [features/audiometry.py](features/audiometry.py) | Reenfocado: ahora recibe **claridad 1-5** (lo que devuelve `AudioTest.js`), no "umbral 0-100%". |
+| `umbrales_a_curva` | [features/audiometry.py](features/audiometry.py) | Reenfocado: ahora recibe **claridad 0-10** (lo que devuelve `AudioTest.js`), no "umbral 0-100%". |
+| *(nuevo)* puente IA 2 → EQ | [features/eq_bridge.py](features/eq_bridge.py) | Traduce los filtros biquad libres de la IA 2 a las **9 ganancias fijas** del EQ del frontend. |
 | `pd.read_csv` + `pd.merge` de las celdas | [data/datasets.py](data/datasets.py) | Carga centralizada + **split por dispositivo** (evita leakage). |
 | Entrenamiento dentro de celdas | [train/train_score_predictor.py](train/train_score_predictor.py) y [train/train_inverse_eq.py](train/train_inverse_eq.py) | Scripts que entrenan, miden MAE/R² y guardan `.joblib`. |
 | Rutas/constantes sueltas | [config.py](config.py) | Rutas, malla de 248 frecuencias, bandas ISO, semilla. |
@@ -92,19 +93,22 @@ Nada de esto hay que tocarlo ahora; queda anotado para los Pasos 3 y 4:
   `InverseEQ.load(...)` y `ScorePredictor.load(...)`, y exponer el endpoint
   `POST /recommendations/auto-eq/{device_id}`. La conversión de la prueba ya
   está en `audiometry.clarity_to_curve()`.
-- **Frontend (Paso 4):** `AudioTest.js` ya devuelve `[{frequency, score}]`, que
-  es exactamente lo que `clarity_to_curve()` acepta. `InverseEQ.predict_filters()`
-  devuelve los filtros en el formato `{type, fc_hz, gain_db, q}` que necesita el
-  ecualizador de `MusicPlayer.js`.
+- **Frontend (Paso 4):** `AudioTest.js` devuelve `[{hz, score}]` (claridad 0-10),
+  que es lo que `clarity_to_curve()` acepta. La salida de `InverseEQ.predict_filters()`
+  (`{type, fc_hz, gain_db, q}`) se pasa por `eq_bridge.filters_to_eq_gains()` para
+  obtener las **9 ganancias** que espera el estado `eqGains` de `MusicPlayer.js`.
 
 ---
 
 ## Decisiones que tomé al migrar
 
-- **Claridad 1-5 en vez de umbral 0-100%:** el plan pide reenfocar la prueba a
-  "claridad" y `AudioTest.js` ya entrega 1-5, así que `audiometry.py` recibe eso
-  directamente. Mapeo: claridad 5 → 0 dB, claridad 1 → −12 dB (mismo rango que
-  el notebook). El máximo es un parámetro (`max_correction_db`) por si se ajusta.
+- **Claridad 0-10:** `AudioTest.js` califica cada tono de 0 a 10 (0 = no se oye,
+  10 = perfecto), así que `audiometry.py` recibe eso directamente. Mapeo:
+  claridad 10 → 0 dB, claridad 0 → −12 dB. El máximo es un parámetro
+  (`max_correction_db`) por si se ajusta.
+- **9 bandas fijas, no 31:** el frontend usa un EQ de 9 bandas fijas y la IA 2
+  genera filtros biquad libres; `eq_bridge.py` salva esa diferencia muestreando
+  la respuesta de los filtros en las 9 frecuencias del EQ.
 - **Split por dispositivo:** lo exige el plan para no mezclar el mismo
   dispositivo en train y test. Se hace con `GroupShuffleSplit` agrupando por
   `device_name`.

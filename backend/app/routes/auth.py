@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
@@ -19,6 +19,27 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def create_token(user_id: int) -> str:
     return jwt.encode({"user_id": user_id}, SECRET_KEY, algorithm="HS256")
+
+def get_current_user(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+) -> User:
+    """Lee el token 'Bearer <jwt>' del header Authorization y devuelve el User.
+
+    Es la pieza que faltaba para saber DE QUIÉN es cada test sin confiar en un
+    user_id suelto. Las rutas que la usan quedan protegidas automáticamente.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Falta el token de autenticación")
+    token = authorization.replace("Bearer ", "").strip()
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+    return user
 
 @router.post("/register", response_model=UserResponse)
 def register(user: UserCreate, db: Session = Depends(get_db)):

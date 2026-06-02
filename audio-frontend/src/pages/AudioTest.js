@@ -1,5 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+
+const API = 'http://127.0.0.1:8000';
+// Header con el token JWT que guardó el login. El backend saca de ahí el usuario.
+const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
 
 const BANDS = [
   { hz: 40,    label: '40 Hz',  name: 'Sub-Bass',   icon: '💣', color: '#9B59B6', title: 'El Rugido',        tip: 'Kick drum, órgano de tubos, truenos' },
@@ -280,6 +285,12 @@ export default function AudioTest() {
   const audioCtxRef = useRef(null);
   const oscRef      = useRef(null);
 
+  // --- Tests guardados (Postgres vía backend) ---
+  const [savedTests,   setSavedTests]   = useState([]);   // lista resumida del usuario
+  const [loadedTestId, setLoadedTestId] = useState(null); // id si estamos editando uno; null = nuevo
+  const [testName,     setTestName]     = useState('');   // nombre libre que pone el usuario
+  const [apiMsg,       setApiMsg]       = useState('');   // feedback de guardado/errores
+
   const getCtx = () => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -340,11 +351,100 @@ export default function AudioTest() {
     setResults([]);
     setHasPlayed(false);
     setSelectedScore(null);
+    setLoadedTestId(null);
+    setTestName('');
+    setApiMsg('');
   };
 
   const enterPlayer = () => {
     localStorage.setItem('dragonTestCompleted', '1');
+    // Si el test está guardado, dejamos su id para que el reproductor pida su EQ a la IA.
+    if (loadedTestId) localStorage.setItem('dragonActiveTestId', String(loadedTestId));
+    else localStorage.removeItem('dragonActiveTestId');
     navigate('/music');
+  };
+
+  // Trae los tests del usuario al abrir la pantalla (si hay sesión).
+  const loadSavedTests = async () => {
+    try {
+      const res = await axios.get(`${API}/tests`, authHeader());
+      setSavedTests(res.data);
+    } catch (e) {
+      setSavedTests([]); // sin sesión o backend caído: simplemente no hay lista
+    }
+  };
+  useEffect(() => { loadSavedTests(); }, []);
+
+  // Empieza un test NUEVO (limpia cualquier test cargado previamente).
+  const startNew = () => {
+    stopTone();
+    setLoadedTestId(null);
+    setTestName('');
+    setResults([]);
+    setCurrent(0);
+    setSelectedScore(null);
+    setHasPlayed(false);
+    setApiMsg('');
+    setPhase('testing');
+  };
+
+  // Guarda (POST) o sobrescribe (PUT) el test actual en la cuenta del usuario.
+  const persist = async () => {
+    setApiMsg('');
+    const payload = { name: testName.trim() || 'Test sin nombre', results };
+    try {
+      if (loadedTestId) {
+        await axios.put(`${API}/tests/${loadedTestId}`, payload, authHeader());
+        setApiMsg('✓ Test actualizado');
+      } else {
+        const res = await axios.post(`${API}/tests`, payload, authHeader());
+        setLoadedTestId(res.data.id);
+        setApiMsg('✓ Test guardado');
+      }
+      loadSavedTests();
+    } catch (e) {
+      setApiMsg(e.response?.status === 401 ? '⚠ Inicia sesión para guardar' : '⚠ Error al guardar');
+    }
+  };
+
+  // Carga un test guardado y muestra sus resultados (listo para ver/editar).
+  const loadTest = async (id) => {
+    try {
+      const res = await axios.get(`${API}/tests/${id}`, authHeader());
+      setResults(res.data.results || []);
+      setTestName(res.data.name);
+      setLoadedTestId(res.data.id);
+      setApiMsg('');
+      setPhase('results');
+    } catch (e) {
+      setApiMsg('⚠ No se pudo cargar el test');
+    }
+  };
+
+  const renameTest = async (id, currentName) => {
+    const name = window.prompt('Nuevo nombre del test:', currentName);
+    if (name == null) return;
+    try {
+      await axios.put(`${API}/tests/${id}`, { name }, authHeader());
+      if (id === loadedTestId) setTestName(name);
+      loadSavedTests();
+    } catch (e) { setApiMsg('⚠ No se pudo renombrar'); }
+  };
+
+  const removeTest = async (id) => {
+    if (!window.confirm('¿Borrar este test? No se puede deshacer.')) return;
+    try {
+      await axios.delete(`${API}/tests/${id}`, authHeader());
+      if (id === loadedTestId) setLoadedTestId(null);
+      loadSavedTests();
+    } catch (e) { setApiMsg('⚠ No se pudo borrar'); }
+  };
+
+  // Editar un puntaje a mano (sin rehacer la prueba). Limita a 0-10.
+  const editScore = (i, delta) => {
+    setResults(prev => prev.map((r, idx) =>
+      idx === i ? { ...r, score: Math.max(0, Math.min(10, r.score + delta)) } : r
+    ));
   };
 
   const b = BANDS[current];
@@ -417,8 +517,36 @@ export default function AudioTest() {
               ))}
             </div>
 
-            <button className="at-btn-primary" onClick={() => setPhase('testing')}>
-              🐉 Calibrar Mis Parlantes
+            {savedTests.length > 0 && (
+              <div className="at-card">
+                <h3 style={{ margin: '0 0 12px', color: '#e8c36a', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1.5 }}>📁 Tus tests guardados</h3>
+                {savedTests.map(t => (
+                  <div key={t.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', marginBottom: 6,
+                    background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid rgba(232,195,106,0.15)',
+                  }}>
+                    <button
+                      onClick={() => loadTest(t.id)}
+                      title="Cargar este test"
+                      style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', color: '#f0e6d2', cursor: 'pointer', fontSize: 14 }}
+                    >
+                      🎯 {t.name}
+                      <span style={{ display: 'block', fontSize: 11, color: '#6a5a40' }}>
+                        {new Date(t.updated_at).toLocaleString()}
+                      </span>
+                    </button>
+                    <button onClick={() => renameTest(t.id, t.name)} title="Renombrar"
+                      style={{ background: 'rgba(232,195,106,0.08)', border: '1px solid rgba(232,195,106,0.3)', borderRadius: 6, color: '#e8c36a', cursor: 'pointer', padding: '4px 8px' }}>✏️</button>
+                    <button onClick={() => removeTest(t.id)} title="Borrar"
+                      style={{ background: 'rgba(192,57,43,0.12)', border: '1px solid rgba(192,57,43,0.4)', borderRadius: 6, color: '#e88a6a', cursor: 'pointer', padding: '4px 8px' }}>🗑️</button>
+                  </div>
+                ))}
+                {apiMsg && <p style={{ fontSize: 12, color: '#e8c36a', margin: '6px 0 0' }}>{apiMsg}</p>}
+              </div>
+            )}
+
+            <button className="at-btn-primary" onClick={startNew}>
+              🐉 Hacer un Test Nuevo
             </button>
           </>
         )}
@@ -641,13 +769,41 @@ export default function AudioTest() {
                           <div style={{ height: '100%', width: `${r.score * 10}%`, background: r.color, borderRadius: 2 }} />
                         </div>
                       </div>
-                      <span style={{
-                        fontWeight: 800, fontSize: 14,
-                        color: r.score >= 7 ? '#2ECC71' : r.score >= 4 ? '#e8c36a' : '#E74C3C',
-                      }}>{r.score}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <button onClick={() => editScore(i, -1)} title="Bajar"
+                          style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid rgba(232,195,106,0.3)', background: 'rgba(0,0,0,0.3)', color: '#e8c36a', cursor: 'pointer', lineHeight: '16px', padding: 0 }}>−</button>
+                        <span style={{
+                          fontWeight: 800, fontSize: 14, minWidth: 16, textAlign: 'center',
+                          color: r.score >= 7 ? '#2ECC71' : r.score >= 4 ? '#e8c36a' : '#E74C3C',
+                        }}>{r.score}</span>
+                        <button onClick={() => editScore(i, 1)} title="Subir"
+                          style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid rgba(232,195,106,0.3)', background: 'rgba(0,0,0,0.3)', color: '#e8c36a', cursor: 'pointer', lineHeight: '16px', padding: 0 }}>+</button>
+                      </span>
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Guardar / actualizar el test en la cuenta del usuario */}
+              <div className="at-card">
+                <h3 style={{ margin: '0 0 10px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.5, color: '#6a5a40' }}>
+                  💾 {loadedTestId ? 'Actualizar este test' : 'Guardar este test'}
+                </h3>
+                <input
+                  type="text"
+                  value={testName}
+                  onChange={e => setTestName(e.target.value)}
+                  placeholder="Nombre del test (ej: Parlantes sala, Audífonos Sony...)"
+                  style={{
+                    width: '100%', boxSizing: 'border-box', padding: '11px 12px', marginBottom: 10,
+                    background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(232,195,106,0.3)',
+                    borderRadius: 8, color: '#f0e6d2', fontSize: 14,
+                  }}
+                />
+                <button className="at-btn-primary" onClick={persist}>
+                  {loadedTestId ? '💾 Guardar cambios' : '💾 Guardar test'}
+                </button>
+                {apiMsg && <p style={{ fontSize: 13, color: '#e8c36a', margin: '10px 0 0', textAlign: 'center' }}>{apiMsg}</p>}
               </div>
 
               <button className="at-btn-enter" onClick={enterPlayer}>

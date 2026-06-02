@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -13,6 +13,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     devices = relationship("Device", back_populates="owner")
+    test_sessions = relationship("TestSession", back_populates="owner", cascade="all, delete-orphan")
 
 class Device(Base):
     __tablename__ = "devices"
@@ -36,3 +37,15 @@ class AudioTest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     device = relationship("Device", back_populates="tests")
+
+class TestSession(Base):
+    __tablename__ = "test_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    name = Column(String)             # nombre libre que pone el usuario
+    results = Column(JSON)            # lista de bandas: [{"hz":40,"score":7,...}, ...]
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User", back_populates="test_sessions")

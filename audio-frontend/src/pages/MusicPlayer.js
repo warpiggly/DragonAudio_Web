@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+
+const API = 'http://127.0.0.1:8000';
+const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
 
 // ---- Configuración del EQ gráfico (9 bandas ISO 1-octava) ----
 // Cada índice = 1 BiquadFilter encadenado en serie sobre la señal.
@@ -50,6 +54,7 @@ export default function MusicPlayer() {
   // --- Estado del propio procesador (activo / errores de captura) ---
   const [eqActive, setEqActive] = useState(false);
   const [eqError, setEqError] = useState('');
+  const [iaMsg, setIaMsg] = useState('');   // aviso cuando la IA preconfigura el EQ
 
   // --- Referencias a los nodos Web Audio (persisten entre renders, no disparan re-render) ---
   const audioCtxRef = useRef(null);     // AudioContext: motor del grafo de audio
@@ -397,6 +402,22 @@ export default function MusicPlayer() {
     }
   }, [navigate]);
 
+  // IA 2: si venimos de un test guardado, pedimos su EQ y precargamos las bandas.
+  // Se aplica ANTES de activar el procesador, así arranca ya ecualizado.
+  useEffect(() => {
+    const id = localStorage.getItem('dragonActiveTestId');
+    if (!id) return;
+    axios.get(`${API}/tests/${id}/eq`, authHeader())
+      .then(res => {
+        const g = res.data.gains;
+        if (Array.isArray(g) && g.length === DEFAULTS.eqGains.length) {
+          setEqGains(g.map(v => Math.round(v)));   // los sliders son enteros (-12..12)
+          setIaMsg('🤖 Ecualizador ajustado por la IA según tu test. Puedes afinarlo a mano.');
+        }
+      })
+      .catch(() => {});  // sin sesión / sin modelo: se queda en plano
+  }, []);
+
   // Arranca o pausa el visualizador canvas cuando cambia el modo visual.
   useEffect(() => {
     if (!eqActive) return;
@@ -729,6 +750,7 @@ export default function MusicPlayer() {
           {/* EQ gráfico — 9 sliders verticales en fila, estilo ecualizador hardware clásico. */}
           <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
             <h3 style={sectionTitle}>Ecualizador (9 bandas)</h3>
+            {iaMsg && <p style={{ fontSize: 12, color: '#7bd88f', margin: '0 0 10px' }}>{iaMsg}</p>}
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
