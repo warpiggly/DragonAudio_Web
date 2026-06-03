@@ -28,11 +28,14 @@ class InverseEQ:
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import StandardScaler
 
+#Esta es una de las partes mas importantes del codigo, ya que define la estructura del modelo.
+# El modelo es un pipeline que primero escala los datos de entrada con StandardScaler y luego aplica un RandomForestRegressor multisalida para predecir los parametros de los filtros EQ. 
+# El numero de filtros es configurable, lo que permite adaptar el modelo a diferentes necesidades.
         self.n_filters = n_filters
         self.pipeline = Pipeline([
-            ("scaler", StandardScaler()),
-            ("forest", MultiOutputRegressor(
-                RandomForestRegressor(
+            ("scaler", StandardScaler()),#pone todos los números en la misma escala (si no, las frecuencias grandes "pesarían" más que las pequeñas).
+            ("forest", MultiOutputRegressor(#el envoltorio que permite predecir 21 números de golpe (7 filtros × 3 datos: frecuencia, ganancia, Q), en vez de uno solo.
+                RandomForestRegressor(#muchos árboles de decisión votando; predice números, no categorías.
                     n_estimators=n_estimators, random_state=random_state, n_jobs=-1
                 )
             )),
@@ -44,6 +47,10 @@ class InverseEQ:
 
     def predict(self, X):
         return self.pipeline.predict(X)
+    
+    
+#ESTA ES OTRA PARTE IMPORTANTE: Toma la salida cruda del modelo (un array de números) y la convierte en una lista de filtros legibles, con formato dict. 
+# Esto es crucial para que el frontend pueda consumir la salida del modelo y aplicarla al ecualizador.
 
     def predict_filters(self, X) -> list[list[dict]]:
         """Predice y empaqueta la salida como lista de filtros legibles.

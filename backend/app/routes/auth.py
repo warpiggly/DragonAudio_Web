@@ -19,7 +19,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def create_token(user_id: int) -> str:
     return jwt.encode({"user_id": user_id}, SECRET_KEY, algorithm="HS256")
-
+"""Lee el token 'Bearer <jwt>' del header Authorization y devuelve el User. es el corazon de la seguridad de la app, porque es la pieza que faltaba para saber DE QUIÉN es cada test sin confiar en un user_id suelto. Las rutas que la usan quedan protegidas automáticamente."""
 def get_current_user(
     authorization: str = Header(None),
     db: Session = Depends(get_db),

@@ -388,7 +388,7 @@ export default function AudioTest() {
     setPhase('testing');
   };
 
-  // Guarda (POST) o sobrescribe (PUT) el test actual en la cuenta del usuario.
+  // Guarda (POST) o sobrescribe (PUT) el test actual en la cuenta del usuario. esto sirve para que el reproductor pueda pedirle a la IA el EQ recomendado basado en este test guardado. Si no hay sesión, muestra error (no se puede guardar sin cuenta). Si ya se guardó antes, hace PUT para actualizarlo; si es nuevo, hace POST y guarda el id que devuelve el backend para futuras ediciones.
   const persist = async () => {
     setApiMsg('');
     const payload = { name: testName.trim() || 'Test sin nombre', results };

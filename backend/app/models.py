@@ -44,7 +44,7 @@ class TestSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
     name = Column(String)             # nombre libre que pone el usuario
-    results = Column(JSON)            # lista de bandas: [{"hz":40,"score":7,...}, ...]
+    results = Column(JSON)            # lista de bandas: [{"hz":40,"score":7,...}, ...] ,esto srive para que el usuario pueda nombrar su sesión de prueba y guardarla con sus resultados, para luego pedirle a la IA un EQ recomendado basado en esos resultados.
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

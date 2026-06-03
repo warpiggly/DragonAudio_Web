@@ -27,7 +27,7 @@ from app.schemas import (
 
 router = APIRouter(prefix="/tests", tags=["Tests"])
 
-
+""" Identificate identificate en esta monda ,quiern eres ,  perro hpta , que no te tengo aqui anotado en mi celular """
 def _get_owned(test_id: int, user: User, db: Session) -> TestSession:
     """Busca el test y verifica que sea del usuario; si no, 404."""
     test = db.query(TestSession).filter(TestSession.id == test_id).first()
@@ -107,5 +107,5 @@ def get_eq(
     db: Session = Depends(get_db),
 ):
     """IA 2: a partir del test guardado, devuelve las 9 ganancias del EQ."""
-    test = _get_owned(test_id, user, db)
-    return test_to_eq(test.results)
+    test = _get_owned(test_id, user, db)# busca el test por id y verifica que sea del usuario autenticado; si no, lanza un 404.
+    return test_to_eq(test.results)# <-- aqui entra la magia: convierte la claridad del test (0-10) a una curva de frecuencias, luego la IA predice los filtros biquad, y finalmente se traducen a las ganancias del EQ para el frontend. Todo esto en un solo paso, gracias a la función test_to_eq.

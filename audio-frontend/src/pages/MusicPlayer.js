@@ -264,13 +264,15 @@ export default function MusicPlayer() {
       });
       const source = ctx.createMediaStreamSource(audioStream);
 
+
+      //Esto es lo más impresionante de tu app. Conecta "cajitas" de sonido en cadena (como pedales de guitarra):
       // --- 1) Ecualizador gráfico de 9 bandas (1 BiquadFilter por banda) ---
       const filters = EQ_BANDS.map((band, i) => {
         const f = ctx.createBiquadFilter();
         f.type = band.type;
         f.frequency.value = band.freq;
         if (band.type === 'peaking') f.Q.value = 1.41; // ancho ≈ 1/2 octava
-        f.gain.value = eqGains[i];
+        f.gain.value = eqGains[i];//aqui  entra la IA con sus ganancias predecidas, o el usuario si las ajusta a mano. Si el efecto está en Mute, el gain se pone a 0 (curva plana); si está en Solo, se mantiene el valor pero los demás efectos se silencian.
         return f;
       });
 
@@ -393,16 +395,17 @@ export default function MusicPlayer() {
     setEqActive(false);
   };
 
+  //La sincronización estado→audio es clave para que los controles sean responsivos sin reconstruir la cadena DSP:
   // --- Sincronización estado React → nodos Web Audio ---
   // Cada vez que el usuario mueve un slider (o pulsa ↺), propagamos el valor
   // directamente al nodo correspondiente, sin reconstruir la cadena.
   useEffect(() => {
     const on = effectActive('eq');                 // si está off → curva plana (0 dB)
     eqFiltersRef.current.forEach((f, i) => {
-      if (f) f.gain.value = on ? eqGains[i] : 0;
+      if (f) f.gain.value = on ? eqGains[i] : 0;//mueve el filtro real según el estado del slider, o lo silencia si el efecto está en Mute o si otro efecto está en Solo. El solo de EQ no silencia el volumen master, para que puedas escuchar la diferencia entre con/sin EQ sin perder el nivel de salida.
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eqGains, muted, solo]);
+  }, [eqGains, muted, solo]);// se ejecuta cuando cambian las ganancias del EQ, o cuando se activa el Mute/Solo de cualquier efecto (porque el estado de los demás efectos afecta si este se aplica o no).
   useEffect(() => {
     const on = effectActive('comp');               // si está off → threshold 0 / ratio 1 (sin compresión)
     if (compressorRef.current) {
@@ -437,13 +440,13 @@ export default function MusicPlayer() {
   // IA 2: si venimos de un test guardado, pedimos su EQ y precargamos las bandas.
   // Se aplica ANTES de activar el procesador, así arranca ya ecualizado.
   useEffect(() => {
-    const id = localStorage.getItem('dragonActiveTestId');
+    const id = localStorage.getItem('dragonActiveTestId');//¿venimos de un test guardado? Si es así, pedimos su EQ recomendado y lo aplicamos al arrancar el procesador. Si no hay test o no se puede cargar, se queda en plano (curva plana = 0 dB en todas las bandas).
     if (!id) return;
-    axios.get(`${API}/tests/${id}/eq`, authHeader())
+    axios.get(`${API}/tests/${id}/eq`, authHeader())//pide a la API el EQ recomendado para el test guardado, que es un array de ganancias en dB para cada banda. Si la respuesta es válida, actualiza el estado del EQ con esas ganancias (redondeadas a enteros para los sliders) y muestra un mensaje avisando al usuario. Si no se puede cargar (sin sesión, sin modelo, error de red), se ignora y se deja el EQ en plano.
       .then(res => {
-        const g = res.data.gains;
+        const g = res.data.gains;//9 ganancias en dB para las 9 bandas del EQ. Si la respuesta es un array con la longitud correcta, actualiza el estado del EQ con esos valores (redondeados a enteros para que los sliders los muestren correctamente) y muestra un mensaje avisando al usuario de que el EQ ha sido ajustado por la IA según su test, y que puede afinarlo a mano si lo desea. Si la respuesta no es válida, se ignora y se deja el EQ en plano (curva plana = 0 dB en todas las bandas).
         if (Array.isArray(g) && g.length === DEFAULTS.eqGains.length) {
-          setEqGains(g.map(v => Math.round(v)));   // los sliders son enteros (-12..12)
+          setEqGains(g.map(v => Math.round(v)));   // los sliders son enteros (-12..12) , mueve el estado del EQ a las ganancias recomendadas por la IA. Si el usuario luego ajusta los sliders, se sobreescriben estos valores con los que elija manualmente.
           setIaMsg('🤖 Ecualizador ajustado por la IA según tu test. Puedes afinarlo a mano.');
         }
       })

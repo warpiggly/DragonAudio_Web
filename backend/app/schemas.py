@@ -26,7 +26,7 @@ class AudioTestCreate(BaseModel):
 
 class TestSessionCreate(BaseModel):
     name: str
-    results: List[Any]          # lista de bandas: [{"hz":40,"score":7,...}, ...]
+    results: List[Any]          # lista de bandas: [{"hz":40,"score":7,...}, ...] , esto sirve para que el usuario pueda nombrar su sesión de prueba y guardarla con sus resultados, para luego pedirle a la IA un EQ recomendado basado en esos resultados.
 
 class TestSessionUpdate(BaseModel):
     name: Optional[str] = None      # renombrar

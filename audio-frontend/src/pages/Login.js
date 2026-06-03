@@ -14,7 +14,7 @@ export default function Login() {
       const res = await axios.post('http://127.0.0.1:8000/auth/login', {
         email, password, name: ''
       });
-      localStorage.setItem('token', res.data.token);
+      localStorage.setItem('token', res.data.token);//guarda lalve de autenticación en el almacenamiento local del navegador para usarla en futuras solicitudes.
       localStorage.setItem('user', JSON.stringify(res.data.user));
       navigate('/dashboard');
     } catch (err) {
