@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate, Link } from 'react-router-dom';
+import API from '../api';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -11,7 +12,7 @@ export default function Login() {
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      const res = await axios.post('http://127.0.0.1:8000/auth/login', {
+      const res = await axios.post(`${API}/auth/login`, {
         email, password, name: ''
       });
       localStorage.setItem('token', res.data.token);//guarda lalve de autenticación en el almacenamiento local del navegador para usarla en futuras solicitudes.

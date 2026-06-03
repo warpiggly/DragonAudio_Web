@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import API from '../api';
 
-const API = 'http://127.0.0.1:8000';
 // Header con el token JWT que guardó el login. El backend saca de ahí el usuario.
 const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
 

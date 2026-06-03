@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import API from '../api';
 
-const API = 'http://127.0.0.1:8000';
 const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
 
 // ---- Configuración del EQ gráfico (9 bandas ISO 1-octava) ----
