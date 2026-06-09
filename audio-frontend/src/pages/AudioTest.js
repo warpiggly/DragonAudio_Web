@@ -6,108 +6,138 @@ import API from '../api';
 // Header con el token JWT que guardó el login. El backend saca de ahí el usuario.
 const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
 
+// 11 frecuencias clave, cada una etiquetada con su categoría auditiva (cat).
 const BANDS = [
-  { hz: 40,    label: '40 Hz',  name: 'Sub-Bass',   icon: '💣', color: '#9B59B6', title: 'El Rugido',        tip: 'Kick drum, órgano de tubos, truenos' },
-  { hz: 80,    label: '80 Hz',  name: 'Sub-Bass',   icon: '🐘', color: '#7D3C98', title: 'Graves Profundos', tip: 'Bajo eléctrico, batería pesada' },
-  { hz: 125,   label: '125 Hz', name: 'Bass',       icon: '🥁', color: '#2980B9', title: 'Cuerpo del Bajo',  tip: 'Guitarra bass, kick drum' },
-  { hz: 250,   label: '250 Hz', name: 'Bass',       icon: '🎸', color: '#1A5276', title: 'Calidez',          tip: 'Cuerpo del piano, guitarra acústica' },
-  { hz: 500,   label: '500 Hz', name: 'Mid',        icon: '🎹', color: '#1E8449', title: 'Claridad Media',   tip: 'Voz masculina, cuerpo vocal' },
-  { hz: 1000,  label: '1 kHz',  name: 'Referencia', icon: '🎤', color: '#D4AC0D', title: 'Centro Vocal',     tip: '¡El más importante! La frecuencia de referencia universal' },
-  { hz: 2000,  label: '2 kHz',  name: 'Upper-Mid',  icon: '🎵', color: '#CA6F1E', title: 'Presencia Vocal',  tip: 'Voz femenina, definición de instrumentos' },
-  { hz: 4000,  label: '4 kHz',  name: 'Presencia',  icon: '🔔', color: '#A93226', title: 'Nitidez',          tip: 'Consonantes del habla, ataque' },
-  { hz: 8000,  label: '8 kHz',  name: 'Treble',     icon: '🎷', color: '#C0392B', title: 'Brillo',           tip: 'Platillos, agudos del violín' },
-  { hz: 12000, label: '12 kHz', name: 'Hi-Treble',  icon: '✨', color: '#117A65', title: 'Aire',             tip: 'Overtones, espacialidad' },
-  { hz: 16000, label: '16 kHz', name: 'Brillantez', icon: '⭐', color: '#0E6251', title: 'Extensión',        tip: 'Solo parlantes premium lo reproducen' },
+  { hz: 40,    label: '40 Hz',  cat: 'Subgraves',       icon: '💣', color: '#9B59B6' },
+  { hz: 80,    label: '80 Hz',  cat: 'Graves',          icon: '🐘', color: '#7D3C98' },
+  { hz: 125,   label: '125 Hz', cat: 'Graves',          icon: '🥁', color: '#2980B9' },
+  { hz: 250,   label: '250 Hz', cat: 'Medios graves',   icon: '🎸', color: '#1A5276' },
+  { hz: 500,   label: '500 Hz', cat: 'Medios',          icon: '🎹', color: '#1E8449' },
+  { hz: 1000,  label: '1 kHz',  cat: 'Medios para voz', icon: '🎤', color: '#D4AC0D' },
+  { hz: 2000,  label: '2 kHz',  cat: 'Medios para voz', icon: '🎵', color: '#CA6F1E' },
+  { hz: 4000,  label: '4 kHz',  cat: 'Presencia',       icon: '🔔', color: '#A93226' },
+  { hz: 8000,  label: '8 kHz',  cat: 'Agudos',          icon: '🎷', color: '#C0392B' },
+  { hz: 12000, label: '12 kHz', cat: 'Brillo',          icon: '✨', color: '#117A65' },
+  { hz: 16000, label: '16 kHz', cat: 'Brillo',          icon: '⭐', color: '#0E6251' },
 ];
 
+// Orden de las categorías auditivas (para agrupar los resultados).
+const CATEGORIES = ['Subgraves', 'Graves', 'Medios graves', 'Medios', 'Medios para voz', 'Presencia', 'Agudos', 'Brillo'];
+
+// Ganancia MÁXIMA por frecuencia (fader al 100%). El fader escala sobre esto con
+// curva cuadrática para dar control fino justo en los volúmenes bajos (el umbral).
 const GAIN = { 40:0.9, 80:0.8, 125:0.7, 250:0.55, 500:0.42, 1000:0.35, 2000:0.3, 4000:0.27, 8000:0.3, 12000:0.35, 16000:0.42 };
-const S_EMOJI = { 0:'❌', 2:'😕', 5:'😊', 8:'🔥', 10:'💥' };
 
-function getDiagnosis(results) {
-  const avg = arr => arr.length ? arr.reduce((s, r) => s + r.score, 0) / arr.length : 0;
-  const sub   = avg(results.filter(r => r.hz <= 80));
-  const bass  = avg(results.filter(r => r.hz > 80   && r.hz <= 250));
-  const mids  = avg(results.filter(r => r.hz > 250  && r.hz <= 2000));
-  const highs = avg(results.filter(r => r.hz > 2000));
-  const overall = avg(results);
+// "Facilidad de detección" (0-100) a partir del umbral del fader: umbral BAJO =
+// se oye con poco volumen = se detecta fácil = valor ALTO. Compatible con tests
+// viejos que solo guardaban `score` (claridad 0-10).
+const easeOf = r => r.threshold != null ? (100 - r.threshold) : (r.score != null ? r.score * 10 : 0);
 
-  const bandRatings = [
-    { name: '💣 Sub-Bajos (40-80 Hz)',  score: sub,
-      note: sub < 3 ? 'Casi nulo — normal en parlantes compactos' : sub < 5 ? 'Limitado' : sub < 7 ? 'Decente' : 'Potente y profundo' },
-    { name: '🥁 Bajos (125-250 Hz)',    score: bass,
-      note: bass < 4 ? 'Escaso' : bass < 6 ? 'Aceptable' : bass < 8 ? 'Bueno' : 'Sólido y cálido' },
-    { name: '🎤 Medios (500-2000 Hz)',  score: mids,
-      note: mids < 5 ? 'Débil — la voz sonará opaca' : mids < 7 ? 'Funcional' : mids < 9 ? 'Claro y definido' : 'Transparente — nivel de estudio' },
-    { name: '✨ Agudos (4k-16k Hz)',    score: highs,
-      note: highs < 4 ? 'Truncado — le faltan agudos' : highs < 6 ? 'Limitado' : highs < 8 ? 'Buena extensión' : 'Extendido y aireado' },
-  ];
-
-  let type, grade, desc;
-  if      (overall >= 8.5)                             { type = '🏆 Monitor HiFi';   grade = 'A+'; desc = '¡Extraordinario! Respuesta plana y extendida. Parlantes audiófilo de primer nivel.'; }
-  else if (overall >= 7  && sub >= 5)                  { type = '🎧 Sistema Hi-Fi';  grade = 'A';  desc = 'Excelente balance. Graves y agudos bien definidos. ¡La música suena como debe!'; }
-  else if (mids >= 7 && bass >= 5 && highs >= 6)       { type = '🎵 Estudio Casero'; grade = 'B+'; desc = 'Sólidos en medios y agudos. Perfectos para música y podcast.'; }
-  else if (mids >= 6 && highs >= 5 && sub < 4)         { type = '💻 Multimedia';     grade = 'B';  desc = 'Medios claros. Ideal para video, voz y contenido web. Sin graves profundos.'; }
-  else if (bass >= 7 && highs < 4)                     { type = '🔈 Bass Heavy';     grade = 'C+'; desc = 'Graves dominantes pero le faltan agudos. Pierde detalle en la música.'; }
-  else if (sub < 2 && mids >= 5)                       { type = '📱 Portátil';       grade = 'C';  desc = 'Sin graves profundos. Típico de smartphones y laptops.'; }
-  else if (overall < 4)                                { type = '📺 Audio Básico';   grade = 'D';  desc = 'Respuesta muy limitada. Considera un sistema de audio externo.'; }
-  else                                                  { type = '🔊 Estándar';       grade = 'C+'; desc = 'Respuesta funcional para uso cotidiano.'; }
-
-  return { type, grade, desc, bandRatings, overall };
+// Convierte puntos en una curva SUAVE (Catmull-Rom -> Bézier), estilo analizador.
+function smoothPath(pts) {
+  if (pts.length < 2) return pts.length ? `M${pts[0].x},${pts[0].y}` : '';
+  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
 }
 
+// Mapa de percepción estilo espectrómetro / analizador (tipo Pro-Q): fondo oscuro
+// degradado, rejilla de frecuencias, curva suave con relleno degradado + glow y
+// nodos luminosos. Altura del punto = volumen del fader: MÁS volumen = MÁS abajo,
+// MENOS volumen = MÁS arriba. Con margen superior para que el pico no toque el borde.
 function FreqGraph({ results }) {
-  const W = 560, H = 230;
-  const P = { t: 25, r: 22, b: 55, l: 46 };
+  const W = 600, H = 280;
+  const P = { t: 30, r: 16, b: 46, l: 16 };
   const iW = W - P.l - P.r;
   const iH = H - P.t - P.b;
-  const logMin = Math.log10(30), logMax = Math.log10(20000);
+  const base = P.t + iH;
+  const headroom = 26;                          // margen superior: el pico nunca toca el borde
+  const logMin = Math.log10(20), logMax = Math.log10(22000);
   const xOf = hz => P.l + ((Math.log10(hz) - logMin) / (logMax - logMin)) * iW;
-  const yOf = s  => P.t + iH - (s / 10) * iH;
-  const pts = results.map(r => ({ x: xOf(r.hz), y: yOf(r.score), ...r }));
-  const lineD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const areaD = `${lineD} L${pts[pts.length-1].x.toFixed(1)},${(P.t+iH).toFixed(1)} L${pts[0].x.toFixed(1)},${(P.t+iH).toFixed(1)}Z`;
+  // e = easeOf (0-100): 100 = poco volumen (arriba), 0 = mucho volumen (abajo).
+  const yOf = e => base - (e / 100) * (iH - headroom);
+
+  const pts = results.map(r => ({ x: xOf(r.hz), y: yOf(easeOf(r)), color: r.color }));
+  const curve = smoothPath(pts);
+  const area = pts.length ? `${curve} L${pts[pts.length-1].x.toFixed(1)},${base} L${pts[0].x.toFixed(1)},${base} Z` : '';
+
+  const gridF = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+  const fLabel = hz => hz >= 1000 ? `${hz / 1000}k` : `${hz}`;
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
-      <rect x={P.l} y={P.t} width={iW} height={iH} fill="#0d0507" rx="4" />
-      <rect x={xOf(30)}   y={P.t} width={xOf(250)-xOf(30)}     height={iH} fill="rgba(155,89,182,0.08)" />
-      <rect x={xOf(250)}  y={P.t} width={xOf(4000)-xOf(250)}   height={iH} fill="rgba(39,174,96,0.06)"  />
-      <rect x={xOf(4000)} y={P.t} width={xOf(20000)-xOf(4000)} height={iH} fill="rgba(52,152,219,0.06)" />
-      <text x={(xOf(30)+xOf(250))/2}     y={P.t+14} textAnchor="middle" fontSize="8" fill="rgba(155,89,182,0.9)">BAJOS</text>
-      <text x={(xOf(250)+xOf(4000))/2}   y={P.t+14} textAnchor="middle" fontSize="8" fill="rgba(39,174,96,0.9)">MEDIOS</text>
-      <text x={(xOf(4000)+xOf(20000))/2} y={P.t+14} textAnchor="middle" fontSize="8" fill="rgba(52,152,219,0.9)">AGUDOS</text>
-      {[0,2,4,6,8,10].map(s => (
-        <g key={s}>
-          <line x1={P.l} y1={yOf(s)} x2={W-P.r} y2={yOf(s)}
-            stroke={s === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)'} strokeWidth="1" />
-          <text x={P.l-6} y={yOf(s)+4} textAnchor="end" fontSize="10" fill="#554540">{s}</text>
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+      <defs>
+        <linearGradient id="fqFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor="#e8c36a" stopOpacity="0.55" />
+          <stop offset="45%"  stopColor="#c0392b" stopOpacity="0.26" />
+          <stop offset="100%" stopColor="#c0392b" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="fqLine" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stopColor="#9B59B6" />
+          <stop offset="48%"  stopColor="#e8c36a" />
+          <stop offset="100%" stopColor="#C0392B" />
+        </linearGradient>
+        <linearGradient id="fqBg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor="#170a0c" />
+          <stop offset="100%" stopColor="#070405" />
+        </linearGradient>
+        <filter id="fqGlow" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="3.2" result="b" />
+          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+
+      {/* Fondo */}
+      <rect x={P.l} y={P.t} width={iW} height={iH} rx="8" fill="url(#fqBg)" stroke="rgba(232,195,106,0.16)" />
+
+      {/* Rejilla horizontal */}
+      {[0, 0.25, 0.5, 0.75, 1].map(t => (
+        <line key={`r${t}`} x1={P.l} y1={base - t * iH} x2={W - P.r} y2={base - t * iH}
+          stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+      ))}
+      {/* Rejilla vertical + etiquetas de frecuencia */}
+      {gridF.map(hz => (
+        <g key={`g${hz}`}>
+          <line x1={xOf(hz)} y1={P.t} x2={xOf(hz)} y2={base} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+          <text x={xOf(hz)} y={base + 15} textAnchor="middle" fontSize="9" fill="#6a5a44">{fLabel(hz)}</text>
         </g>
       ))}
-      <line x1={P.l} y1={yOf(7)} x2={W-P.r} y2={yOf(7)} stroke="rgba(232,195,106,0.3)" strokeWidth="1" strokeDasharray="5,4" />
-      <path d={areaD} fill="rgba(192,57,43,0.18)" />
-      <path d={lineD} fill="none" stroke="#c0392b" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+
+      {/* Etiquetas de zona */}
+      <text x={(xOf(20) + xOf(250)) / 2}    y={P.t + 13} textAnchor="middle" fontSize="8" letterSpacing="1.5" fill="rgba(155,89,182,0.7)">GRAVES</text>
+      <text x={(xOf(250) + xOf(4000)) / 2}  y={P.t + 13} textAnchor="middle" fontSize="8" letterSpacing="1.5" fill="rgba(232,195,106,0.7)">MEDIOS</text>
+      <text x={(xOf(4000) + xOf(22000)) / 2} y={P.t + 13} textAnchor="middle" fontSize="8" letterSpacing="1.5" fill="rgba(192,57,43,0.85)">AGUDOS</text>
+
+      {/* Relleno + curva con glow */}
+      {area && <path d={area} fill="url(#fqFill)" />}
+      {curve && <path d={curve} fill="none" stroke="url(#fqLine)" strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" filter="url(#fqGlow)" />}
+
+      {/* Nodos luminosos */}
       {pts.map((p, i) => (
         <g key={i}>
-          <circle cx={p.x} cy={p.y} r="6" fill={results[i].color} stroke="#0d0507" strokeWidth="2" />
-          {results[i].score <= 2 && <text x={p.x} y={p.y-13} textAnchor="middle" fontSize="11">⚠️</text>}
+          <circle cx={p.x} cy={p.y} r="7"   fill={p.color} opacity="0.28" filter="url(#fqGlow)" />
+          <circle cx={p.x} cy={p.y} r="4.5" fill={p.color} stroke="#fff" strokeWidth="1.3" />
         </g>
       ))}
-      {results.map(r => (
-        <text key={`lbl-${r.hz}`} x={xOf(r.hz)} y={H-33} textAnchor="middle" fontSize="9" fill="#665040">
-          {r.hz >= 1000 ? `${r.hz/1000}k` : r.hz}
-        </text>
-      ))}
-      {results.map(r => (
-        <text key={`ico-${r.hz}`} x={xOf(r.hz)} y={H-16} textAnchor="middle" fontSize="11">{r.icon}</text>
-      ))}
-      <text x={16} y={P.t + iH/2} textAnchor="middle" fontSize="9" fill="#554540"
-        transform={`rotate(-90, 16, ${P.t + iH/2})`}>Claridad (0-10)</text>
-      <text x={W/2} y={H} textAnchor="middle" fontSize="9" fill="#554540">Frecuencia (Hz)</text>
+
+      {/* Pie */}
+      <text x={W / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="#554540">
+        Frecuencia (Hz) · arriba = se detecta fácil · abajo = necesita más volumen
+      </text>
     </svg>
   );
 }
 
 const DRAGON_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap');
   @keyframes dragonShift {
     0%, 100% { background-position: 0% 0%, 100% 100%, 0% 50%; }
     50%      { background-position: 100% 100%, 0% 0%, 100% 50%; }
@@ -144,7 +174,7 @@ const DRAGON_CSS = `
       linear-gradient(135deg, #0a0405 0%, #18080a 50%, #0a0405 100%);
     background-size: 200% 200%, 200% 200%, 200% 200%;
     animation: dragonShift 22s ease-in-out infinite;
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Cinzel', serif;
     color: #f0e6d2;
     box-sizing: border-box;
   }
@@ -281,9 +311,10 @@ export default function AudioTest() {
   const [results,       setResults]       = useState([]);
   const [playing,       setPlaying]       = useState(false);
   const [hasPlayed,     setHasPlayed]     = useState(false);
-  const [selectedScore, setSelectedScore] = useState(null);
+  const [faderValue,    setFaderValue]    = useState(0);   // 0-100: posición del fader (umbral mínimo audible)
   const audioCtxRef = useRef(null);
   const oscRef      = useRef(null);
+  const gainRef     = useRef(null);
 
   // --- Tests guardados (Postgres vía backend) ---
   const [savedTests,   setSavedTests]   = useState([]);   // lista resumida del usuario
@@ -299,15 +330,20 @@ export default function AudioTest() {
     return audioCtxRef.current;
   };
 
+  // fader 0-100 -> ganancia real. Curva cuadrática: control fino en volúmenes bajos.
+  const faderToGain = (f, hz) => Math.pow(f / 100, 2) * GAIN[hz];
+
   const stopTone = () => {
     if (oscRef.current) {
       try { oscRef.current.stop(); } catch(e) {}
       oscRef.current = null;
     }
+    gainRef.current = null;
     setPlaying(false);
   };
 
-  const playTone = () => {
+  // Arranca un tono CONTINUO en la frecuencia actual, con el volumen del fader.
+  const startTone = () => {
     stopTone();
     const ctx  = getCtx();
     const freq = BANDS[current].hz;
@@ -315,27 +351,35 @@ export default function AudioTest() {
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(GAIN[freq], ctx.currentTime + 0.06);
-    gain.gain.setValueAtTime(GAIN[freq], ctx.currentTime + 2.7);
-    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 3.0);
+    gain.gain.setValueAtTime(faderToGain(faderValue, freq), ctx.currentTime);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 3.0);
-    oscRef.current = osc;
+    oscRef.current  = osc;
+    gainRef.current = gain;
     setPlaying(true);
     setHasPlayed(true);
-    osc.onended = () => { setPlaying(false); oscRef.current = null; };
+  };
+
+  // Mueve el fader: actualiza el volumen del tono en vivo (si está sonando).
+  const onFader = (v) => {
+    setFaderValue(v);
+    const ctx = audioCtxRef.current;
+    if (gainRef.current && ctx) {
+      gainRef.current.gain.setTargetAtTime(faderToGain(v, BANDS[current].hz), ctx.currentTime, 0.02);
+    }
   };
 
   const handleNext = () => {
-    if (selectedScore === null) return;
+    if (!hasPlayed || faderValue <= 0) return;
     stopTone();
     const b = BANDS[current];
-    const newResults = [...results, { hz: b.hz, label: b.label, icon: b.icon, color: b.color, name: b.name, score: selectedScore }];
+    // Guardamos el umbral crudo (fader 0-100) y derivamos un score 0-10 para la IA
+    // del EQ: umbral bajo (se oye fácil) -> score alto (poca corrección).
+    const score = Math.round((1 - faderValue / 100) * 100) / 10;
+    const newResults = [...results, { hz: b.hz, label: b.label, icon: b.icon, color: b.color, cat: b.cat, threshold: faderValue, score }];
     setResults(newResults);
-    setSelectedScore(null);
+    setFaderValue(0);
     setHasPlayed(false);
     if (current < BANDS.length - 1) {
       setCurrent(c => c + 1);
@@ -350,7 +394,7 @@ export default function AudioTest() {
     setCurrent(0);
     setResults([]);
     setHasPlayed(false);
-    setSelectedScore(null);
+    setFaderValue(0);
     setLoadedTestId(null);
     setTestName('');
     setApiMsg('');
@@ -382,7 +426,7 @@ export default function AudioTest() {
     setTestName('');
     setResults([]);
     setCurrent(0);
-    setSelectedScore(null);
+    setFaderValue(0);
     setHasPlayed(false);
     setApiMsg('');
     setPhase('testing');
@@ -440,13 +484,6 @@ export default function AudioTest() {
     } catch (e) { setApiMsg('⚠ No se pudo borrar'); }
   };
 
-  // Editar un puntaje a mano (sin rehacer la prueba). Limita a 0-10.
-  const editScore = (i, delta) => {
-    setResults(prev => prev.map((r, idx) =>
-      idx === i ? { ...r, score: Math.max(0, Math.min(10, r.score + delta)) } : r
-    ));
-  };
-
   const b = BANDS[current];
   const progress = (current / BANDS.length) * 100;
 
@@ -476,7 +513,14 @@ export default function AudioTest() {
       <div className="at-content">
         {/* Header común */}
         <div className="at-header">
-          <h1 className="at-title">🐉 DRAGON AUDIO</h1>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <img
+              src="/logo.png"
+              alt="DragonAudio"
+              style={{ width: 72, height: 72, objectFit: 'contain', filter: 'drop-shadow(0 0 14px rgba(232,195,106,0.65))' }}
+            />
+            <h1 className="at-title">DRAGON AUDIO</h1>
+          </div>
           <p className="at-sub">龙 之 音</p>
           <p style={{ margin: '5px 0 0', fontSize: 13, color: '#8a7a60', letterSpacing: 0.8 }}>{phaseSubtitle}</p>
         </div>
@@ -488,9 +532,9 @@ export default function AudioTest() {
               <h3 style={{ margin: '0 0 12px', color: '#e8c36a', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1.5 }}>🎯 ¿Qué descubrirás?</h3>
               <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 2, color: '#c0a878', fontSize: 14 }}>
                 <li>Cómo responden tus parlantes en <strong style={{ color: '#f0e6d2' }}>11 frecuencias clave</strong></li>
-                <li>Tu <strong style={{ color: '#f0e6d2' }}>gráfica de respuesta en frecuencia</strong> personalizada</li>
-                <li>El <strong style={{ color: '#f0e6d2' }}>perfil exacto</strong> de tus parlantes con diagnóstico</li>
-                <li>Qué rangos son fuertes y cuáles tienen limitaciones</li>
+                <li>Tu <strong style={{ color: '#f0e6d2' }}>mapa de percepción de frecuencias</strong> personalizado</li>
+                <li>Las frecuencias agrupadas por <strong style={{ color: '#f0e6d2' }}>categorías auditivas</strong></li>
+                <li>Qué rangos detecta tu dispositivo con mayor o menor facilidad</li>
               </ul>
             </div>
 
@@ -502,14 +546,14 @@ export default function AudioTest() {
                 <span style={{ color: '#e8c36a', fontWeight: 700 }}>2.</span>
                 <span>Usa <strong style={{ color: '#f0e6d2' }}>auriculares o parlantes externos</strong> para mayor precisión</span>
                 <span style={{ color: '#e8c36a', fontWeight: 700 }}>3.</span>
-                <span>Califica <strong style={{ color: '#f0e6d2' }}>qué tan claro lo oyes del 0 al 10</strong> para cada tono</span>
+                <span>Sube el <strong style={{ color: '#f0e6d2' }}>fader lentamente</strong> hasta que <strong style={{ color: '#f0e6d2' }}>apenas</strong> escuches cada tono y déjalo ahí</span>
                 <span style={{ color: '#e8c36a', fontWeight: 700 }}>4.</span>
                 <span>Hazlo en un <strong style={{ color: '#f0e6d2' }}>lugar tranquilo</strong> para mayor precisión</span>
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: 7, marginBottom: 18, flexWrap: 'wrap', justifyContent: 'center' }}>
-              {['11 frecuencias', '~3 minutos', 'Escala 0-10', 'Gráfica incluida', 'Diagnóstico'].map(tag => (
+              {['11 frecuencias', '~3 minutos', 'Fader de volumen', 'Mapa de percepción', 'Por categorías'].map(tag => (
                 <span key={tag} style={{
                   background: 'rgba(192,57,43,0.1)', border: '1px solid rgba(232,195,106,0.18)',
                   borderRadius: 20, padding: '4px 12px', fontSize: 12, color: '#8a7a60',
@@ -574,10 +618,9 @@ export default function AudioTest() {
             {/* Tarjeta de frecuencia */}
             <div className="at-card" style={{ borderColor: `${b.color}55`, background: `${b.color}0d`, textAlign: 'center', paddingBottom: 16 }}>
               <div style={{ fontSize: 42, marginBottom: 6 }}>{b.icon}</div>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2.5, color: b.color, marginBottom: 4, fontWeight: 600 }}>{b.cat}</div>
               <div style={{ fontSize: 30, fontWeight: 900, color: '#f0e6d2', letterSpacing: -1 }}>{b.label}</div>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2.5, color: b.color, margin: '4px 0 8px', fontWeight: 600 }}>{b.name}</div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: '#c0a878', marginBottom: 4 }}>"{b.title}"</div>
-              <div style={{ fontSize: 13, color: '#7a6a50' }}>{b.tip}</div>
+              <div style={{ fontSize: 13, color: '#7a6a50', marginTop: 4 }}>Sube el fader hasta que <strong style={{ color: '#c0a878' }}>apenas</strong> empieces a oírlo</div>
 
               {/* Visualizador de onda */}
               <div style={{ height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 12 }}>
@@ -598,76 +641,59 @@ export default function AudioTest() {
                 )}
               </div>
               {!playing && hasPlayed && (
-                <div style={{ fontSize: 12, color: '#7a6a50', marginTop: 5 }}>Tono completado — ahora califica</div>
+                <div style={{ fontSize: 12, color: '#7a6a50', marginTop: 5 }}>Tono pausado — reanúdalo si lo necesitas</div>
               )}
             </div>
 
-            {/* Botón reproducir */}
+            {/* Botón reproducir / pausar (tono continuo) */}
             <button
-              onClick={playTone}
-              disabled={playing}
+              onClick={playing ? stopTone : startTone}
               style={{
                 width: '100%', padding: '13px 0', borderRadius: 12, border: 'none',
-                background: playing ? 'rgba(255,255,255,0.04)' : b.color,
-                color: playing ? '#444' : '#fff',
-                fontSize: 15, fontWeight: 700,
-                cursor: playing ? 'default' : 'pointer',
+                background: playing ? 'rgba(255,255,255,0.06)' : b.color,
+                color: playing ? '#e8c36a' : '#fff',
+                fontSize: 15, fontWeight: 700, cursor: 'pointer',
                 marginBottom: 12, transition: 'background 0.2s',
               }}
             >
-              {playing ? '⏸ Reproduciendo...' : hasPlayed ? '↺ Repetir Tono' : '▶ Reproducir Tono'}
+              {playing ? '⏸ Pausar Tono' : hasPlayed ? '▶ Reanudar Tono' : '▶ Reproducir Tono'}
             </button>
 
-            {/* Calificación */}
+            {/* Fader de volumen: el usuario sube hasta el umbral mínimo audible */}
             <div className="at-card" style={{ marginBottom: 12 }}>
-              <div style={{ textAlign: 'center', marginBottom: 12 }}>
+              <div style={{ textAlign: 'center', marginBottom: 14 }}>
                 <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: hasPlayed ? '#f0e6d2' : '#3a2a18' }}>
-                  {hasPlayed ? '¿Qué tan claro lo escuchas? (0-10)' : '▶ Primero reproduce el tono'}
+                  {hasPlayed ? 'Sube el volumen lentamente' : '▶ Primero reproduce el tono'}
                 </p>
                 {hasPlayed && (
                   <p style={{ margin: '3px 0 0', fontSize: 12, color: '#7a6a50' }}>
-                    0 = No escucho nada &nbsp;·&nbsp; 10 = Perfecto y cristalino
+                    Detente justo cuando empieces a oírlo y deja el fader ahí
                   </p>
                 )}
               </div>
 
-              <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
-                {[0,1,2,3,4,5,6,7,8,9,10].map(n => {
-                  const isSel = selectedScore === n;
-                  return (
-                    <div key={n} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                      <button
-                        onClick={() => { if (hasPlayed) setSelectedScore(n); }}
-                        style={{
-                          width: 36, height: 36, borderRadius: '50%',
-                          border: isSel ? '2px solid #e8c36a' : '2px solid rgba(232,195,106,0.13)',
-                          background: isSel ? 'linear-gradient(135deg, #c0392b, #e8c36a)' : 'rgba(28,10,12,0.5)',
-                          color: isSel ? '#fff' : (hasPlayed ? '#b89b6a' : '#2e1e0e'),
-                          fontSize: 13, fontWeight: 700,
-                          cursor: hasPlayed ? 'pointer' : 'default',
-                          transition: 'all 0.12s',
-                          boxShadow: isSel ? '0 0 12px rgba(232,195,106,0.35)' : 'none',
-                        }}
-                      >{n}</button>
-                      <span style={{ fontSize: 10, minHeight: 13 }}>{S_EMOJI[n] || ''}</span>
-                    </div>
-                  );
-                })}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 16 }}>🔈</span>
+                <input
+                  type="range" min="0" max="100" step="1" value={faderValue}
+                  disabled={!hasPlayed}
+                  onChange={e => onFader(Number(e.target.value))}
+                  style={{ flex: 1, accentColor: b.color, cursor: hasPlayed ? 'pointer' : 'default' }}
+                />
+                <span style={{ fontSize: 16 }}>🔊</span>
+                <span style={{ minWidth: 34, textAlign: 'right', fontWeight: 800, fontSize: 15, color: faderValue > 0 ? '#e8c36a' : '#3a2a18' }}>
+                  {faderValue}
+                </span>
               </div>
 
-              {selectedScore !== null && (
+              {hasPlayed && faderValue > 0 && (
                 <div style={{
                   marginTop: 12, padding: '8px 14px', textAlign: 'center',
                   background: 'rgba(192,57,43,0.14)', borderRadius: 8,
                   border: '1px solid rgba(232,195,106,0.22)',
                 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: '#e8c36a' }}>
-                    Seleccionaste: {selectedScore}/10 &nbsp;
-                    {selectedScore === 0 ? '— sin señal detectada'
-                      : selectedScore < 4 ? '— apenas perceptible'
-                      : selectedScore < 7 ? '— claridad media'
-                      : selectedScore < 9 ? '— excelente claridad'
-                      : '— ¡perfectamente nítido!'}
+                    Umbral marcado en {faderValue}/100 — avanza cuando lo dejes en el punto justo
                   </span>
                 </div>
               )}
@@ -676,18 +702,18 @@ export default function AudioTest() {
             {/* Siguiente */}
             <button
               onClick={handleNext}
-              disabled={selectedScore === null}
+              disabled={!(hasPlayed && faderValue > 0)}
               style={{
                 width: '100%', padding: '14px 0', borderRadius: 12,
-                border: selectedScore !== null ? '1px solid rgba(232,195,106,0.35)' : 'none',
-                background: selectedScore !== null
+                border: (hasPlayed && faderValue > 0) ? '1px solid rgba(232,195,106,0.35)' : 'none',
+                background: (hasPlayed && faderValue > 0)
                   ? 'linear-gradient(135deg, #7a1515, #c0392b)'
                   : 'rgba(255,255,255,0.04)',
-                color: selectedScore !== null ? '#f0e6d2' : '#2e1e0e',
+                color: (hasPlayed && faderValue > 0) ? '#f0e6d2' : '#2e1e0e',
                 fontSize: 15, fontWeight: 700,
-                cursor: selectedScore !== null ? 'pointer' : 'default',
+                cursor: (hasPlayed && faderValue > 0) ? 'pointer' : 'default',
                 transition: 'all 0.2s',
-                boxShadow: selectedScore !== null ? '0 0 20px rgba(192,57,43,0.3)' : 'none',
+                boxShadow: (hasPlayed && faderValue > 0) ? '0 0 20px rgba(192,57,43,0.3)' : 'none',
               }}
             >
               {current < BANDS.length - 1 ? 'Siguiente Frecuencia →' : '🎯 Ver mis Resultados'}
@@ -708,80 +734,41 @@ export default function AudioTest() {
 
         {/* ── RESULTS ── */}
         {phase === 'results' && (() => {
-          const dx = getDiagnosis(results);
-          const gradeColors = { 'A+': '#2ECC71', A: '#27AE60', 'B+': '#e8c36a', B: '#E67E22', 'C+': '#E67E22', C: '#E74C3C', D: '#C0392B' };
-          const gc = gradeColors[dx.grade] || '#e8c36a';
+          // Agrupamos por categoría auditiva, en el orden definido.
+          const groups = CATEGORIES
+            .map(cat => ({ cat, items: results.filter(r => (r.cat || '') === cat) }))
+            .filter(g => g.items.length);
           return (
             <>
               <div style={{ textAlign: 'center', marginBottom: 14 }}>
-                <div style={{ fontSize: 30, marginBottom: 4 }}>📊</div>
-                <h2 style={{ margin: 0, fontSize: 19, color: '#f0e6d2' }}>Respuesta de Frecuencia</h2>
-                <p style={{ margin: '3px 0 0', color: '#6a5a40', fontSize: 13 }}>Así suenan tus parlantes en todo el espectro audible</p>
+                <div style={{ fontSize: 30, marginBottom: 4 }}>🗺️</div>
+                <h2 style={{ margin: 0, fontSize: 19, color: '#f0e6d2' }}>Mapa de Percepción</h2>
+                <p style={{ margin: '3px 0 0', color: '#6a5a40', fontSize: 13 }}>Qué rangos detecta tu dispositivo con mayor o menor facilidad</p>
               </div>
 
               <div className="at-card" style={{ padding: '14px 8px' }}>
                 <FreqGraph results={results} />
               </div>
 
-              <div className="at-card" style={{ borderColor: `${gc}44`, background: `${gc}10` }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: '#f0e6d2', marginBottom: 4 }}>{dx.type}</div>
-                    <div style={{ fontSize: 13, color: '#b89b6a', lineHeight: 1.6 }}>{dx.desc}</div>
-                  </div>
-                  <div style={{ textAlign: 'center', minWidth: 64 }}>
-                    <div style={{ fontSize: 36, fontWeight: 900, color: gc, lineHeight: 1 }}>{dx.grade}</div>
-                    <div style={{ fontSize: 11, color: '#6a5a40', marginTop: 2 }}>Calificación</div>
-                    <div style={{ fontSize: 13, color: gc, marginTop: 3, fontWeight: 700 }}>{dx.overall.toFixed(1)}/10</div>
-                  </div>
-                </div>
-              </div>
-
               <div className="at-card">
-                <h3 style={{ margin: '0 0 14px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.5, color: '#6a5a40' }}>Análisis por Rango</h3>
-                {dx.bandRatings.map((br, i) => (
-                  <div key={i} style={{ marginBottom: 13 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, color: '#c0a878' }}>{br.name}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#f0e6d2' }}>{br.score.toFixed(1)}/10</span>
-                    </div>
-                    <div style={{ height: 5, background: 'rgba(255,255,255,0.07)', borderRadius: 2.5, overflow: 'hidden', marginBottom: 3 }}>
-                      <div style={{ height: '100%', width: `${(br.score / 10) * 100}%`, background: 'linear-gradient(90deg, #c0392b, #e8c36a)', borderRadius: 2.5 }} />
-                    </div>
-                    <div style={{ fontSize: 12, color: '#6a5a40' }}>{br.note}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="at-card">
-                <h3 style={{ margin: '0 0 12px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.5, color: '#6a5a40' }}>Detalle por Frecuencia</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
-                  {results.map((r, i) => (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', gap: 9,
-                      padding: '8px 11px', borderRadius: 10,
-                      background: 'rgba(255,255,255,0.02)', border: `1px solid ${r.color}33`,
-                    }}>
-                      <span style={{ fontSize: 18 }}>{r.icon}</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11, color: '#6a5a40', marginBottom: 3 }}>{r.label} · {r.name}</div>
-                        <div style={{ height: 4, background: 'rgba(255,255,255,0.07)', borderRadius: 2 }}>
-                          <div style={{ height: '100%', width: `${r.score * 10}%`, background: r.color, borderRadius: 2 }} />
-                        </div>
+                <h3 style={{ margin: '0 0 14px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.5, color: '#6a5a40' }}>Por categoría auditiva</h3>
+                {groups.map(g => {
+                  const gEase = g.items.reduce((s, r) => s + easeOf(r), 0) / g.items.length;
+                  const rel = gEase / 100;                  // 0..1 absoluto (más volumen = barra más corta)
+                  const col = g.items[0].color;
+                  return (
+                    <div key={g.cat} style={{ marginBottom: 13 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, gap: 8 }}>
+                        <span style={{ fontSize: 13, color: '#c0a878', fontWeight: 600 }}>{g.cat}</span>
+                        <span style={{ fontSize: 11, color: '#6a5a40' }}>{g.items.map(r => r.label).join(' · ')}</span>
                       </div>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <button onClick={() => editScore(i, -1)} title="Bajar"
-                          style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid rgba(232,195,106,0.3)', background: 'rgba(0,0,0,0.3)', color: '#e8c36a', cursor: 'pointer', lineHeight: '16px', padding: 0 }}>−</button>
-                        <span style={{
-                          fontWeight: 800, fontSize: 14, minWidth: 16, textAlign: 'center',
-                          color: r.score >= 7 ? '#2ECC71' : r.score >= 4 ? '#e8c36a' : '#E74C3C',
-                        }}>{r.score}</span>
-                        <button onClick={() => editScore(i, 1)} title="Subir"
-                          style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid rgba(232,195,106,0.3)', background: 'rgba(0,0,0,0.3)', color: '#e8c36a', cursor: 'pointer', lineHeight: '16px', padding: 0 }}>+</button>
-                      </span>
+                      <div style={{ height: 8, background: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${Math.max(6, rel * 100)}%`, background: `linear-gradient(90deg, ${col}, #e8c36a)`, borderRadius: 4 }} />
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
+                <p style={{ fontSize: 11, color: '#6a5a40', margin: '6px 0 0', textAlign: 'center' }}>◀ menor detección&nbsp;·&nbsp;mayor detección ▶</p>
               </div>
 
               {/* Guardar / actualizar el test en la cuenta del usuario */}

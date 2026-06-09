@@ -95,6 +95,12 @@ export default function MusicPlayer() {
   const [eqError, setEqError] = useState('');
   const [iaMsg, setIaMsg] = useState('');   // aviso cuando la IA preconfigura el EQ
 
+  // --- Perfiles de ecualización (cada test guardado = un perfil de dispositivo) ---
+  const [profiles, setProfiles] = useState([]);
+  const [activeProfileId, setActiveProfileId] = useState(
+    () => localStorage.getItem('dragonActiveTestId') || null
+  );
+
   // --- Referencias a los nodos Web Audio (persisten entre renders, no disparan re-render) ---
   const audioCtxRef = useRef(null);     // AudioContext: motor del grafo de audio
   const streamRef = useRef(null);       // MediaStream capturado de la pestaña
@@ -453,20 +459,41 @@ export default function MusicPlayer() {
   }, [volume, muted]);
 
 
-  // IA 2: si venimos de un test guardado, pedimos su EQ y precargamos las bandas.
-  // Se aplica ANTES de activar el procesador, así arranca ya ecualizado.
-  useEffect(() => {
-    const id = localStorage.getItem('dragonActiveTestId');//¿venimos de un test guardado? Si es así, pedimos su EQ recomendado y lo aplicamos al arrancar el procesador. Si no hay test o no se puede cargar, se queda en plano (curva plana = 0 dB en todas las bandas).
+  // Trae la lista de perfiles del usuario (para poder cambiar entre ellos en vivo).
+  const loadProfiles = async () => {
+    try {
+      const res = await axios.get(`${API}/tests`, authHeader());
+      setProfiles(res.data);
+    } catch (e) {
+      setProfiles([]);   // sin sesión o backend caído: simplemente no hay perfiles
+    }
+  };
+
+  // Aplica un perfil al EQ: pide su curva (invertida + IA encima) y la carga en
+  // las 9 bandas. El useEffect de eqGains la propaga en vivo a los filtros, así
+  // que se puede cambiar de perfil sin detener el procesador ni repetir el test.
+  const applyProfile = async (id) => {
     if (!id) return;
-    axios.get(`${API}/tests/${id}/eq`, authHeader())//pide a la API el EQ recomendado para el test guardado, que es un array de ganancias en dB para cada banda. Si la respuesta es válida, actualiza el estado del EQ con esas ganancias (redondeadas a enteros para los sliders) y muestra un mensaje avisando al usuario. Si no se puede cargar (sin sesión, sin modelo, error de red), se ignora y se deja el EQ en plano.
-      .then(res => {
-        const g = res.data.gains;//9 ganancias en dB para las 9 bandas del EQ. Si la respuesta es un array con la longitud correcta, actualiza el estado del EQ con esos valores (redondeados a enteros para que los sliders los muestren correctamente) y muestra un mensaje avisando al usuario de que el EQ ha sido ajustado por la IA según su test, y que puede afinarlo a mano si lo desea. Si la respuesta no es válida, se ignora y se deja el EQ en plano (curva plana = 0 dB en todas las bandas).
-        if (Array.isArray(g) && g.length === DEFAULTS.eqGains.length) {
-          setEqGains(g.map(v => Math.round(v)));   // los sliders son enteros (-12..12) , mueve el estado del EQ a las ganancias recomendadas por la IA. Si el usuario luego ajusta los sliders, se sobreescriben estos valores con los que elija manualmente.
-          setIaMsg('🤖 Ecualizador ajustado por la IA según tu test. Puedes afinarlo a mano.');
-        }
-      })
-      .catch(() => {});  // sin sesión / sin modelo: se queda en plano
+    try {
+      const res = await axios.get(`${API}/tests/${id}/eq`, authHeader());
+      const g = res.data.gains;
+      if (Array.isArray(g) && g.length === DEFAULTS.eqGains.length) {
+        setEqGains(g.map(v => Math.round(v)));   // sliders enteros (-12..12)
+        setActiveProfileId(String(id));
+        localStorage.setItem('dragonActiveTestId', String(id));
+        setIaMsg('🤖 EQ = curva invertida de tu test + ajuste de la IA. Puedes afinarlo a mano.');
+      }
+    } catch (e) {
+      setIaMsg('');   // sin sesión / sin modelo: se queda como esté
+    }
+  };
+
+  // Al montar: carga la lista de perfiles y aplica el activo (si venimos de un test).
+  useEffect(() => {
+    loadProfiles();
+    const id = localStorage.getItem('dragonActiveTestId');
+    if (id) applyProfile(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Arranca o pausa el visualizador canvas cuando cambia el modo visual.
@@ -959,6 +986,41 @@ export default function MusicPlayer() {
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {/* Perfiles: cambia entre dispositivos calibrados sin repetir el test. */}
+          <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
+            <h3 style={sectionTitle}>🎚️ Perfiles de tus dispositivos</h3>
+            {profiles.length === 0 ? (
+              <p style={{ fontSize: 12, color: '#8a7a60', margin: 0 }}>
+                Aún no tienes perfiles. Pulsa 🔬 Recalibrar, haz el test y guárdalo para crear uno.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {profiles.map((p) => {
+                  const active = String(p.id) === String(activeProfileId);
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => applyProfile(p.id)}
+                      title={`Aplicar el EQ del perfil "${p.name}"`}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
+                        padding: '8px 12px', borderRadius: 8, cursor: 'pointer', minWidth: 130,
+                        background: active ? 'linear-gradient(135deg, #7a1515, #c0392b)' : 'rgba(28,10,12,0.5)',
+                        border: `1px solid ${active ? '#e8c36a' : 'rgba(232,195,106,0.25)'}`,
+                        color: active ? '#fff' : '#c0a878',
+                        boxShadow: active ? '0 0 14px rgba(232,195,106,0.35)' : 'none',
+                        transition: 'all 0.15s', fontFamily: "'Cinzel', serif",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>{active ? '🟢' : '🎯'} {p.name}</span>
+                      <span style={{ fontSize: 10, opacity: 0.8 }}>{new Date(p.updated_at).toLocaleString()}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* EQ gráfico — 9 sliders verticales en fila, estilo ecualizador hardware clásico. */}
           <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
             {effectHeader('Ecualizador (9 bandas)', 'eq')}

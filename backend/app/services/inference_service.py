@@ -21,8 +21,16 @@ ROOT = Path(__file__).resolve().parents[3]#SUBE TRES NIVELES PARA LLEGAR A LA RA
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))#ahora puedo importar desde ai/ sin problemas.
 
-from ai.src.config import ARTIFACTS_DIR, EQ_BANDS_FRONTEND, freq_columns
-from ai.src.features.audiometry import clarity_to_curve#traduce la claridad del test (0-10) a una curva de 248 puntos, que es lo que el modelo espera como entrada.
+import numpy as np
+
+from ai.src.config import (
+    ARTIFACTS_DIR,
+    EQ_BANDS_FRONTEND,
+    EQ_GAIN_LIMIT_DB,
+    FREQ_GRID,
+    freq_columns,
+)
+from ai.src.features.audiometry import test_to_inverted_curve  # curva de compensacion invertida (248 pts) a partir del test.
 from ai.src.features.eq_bridge import filters_to_eq_gains#traduce los filtros biquad crudos de la IA a las 9 ganancias que el frontend necesita para el ecualizador.
 from ai.src.models.inverse_eq import InverseEQ#la ia que predice los filtros biquad a partir de la curva de frecuencias.
 
@@ -45,17 +53,38 @@ def _get_model() -> InverseEQ:
 def test_to_eq(results) -> dict:
     """results = lista [{'hz':..., 'score':...}, ...] (lo que guarda el test).
 
+    Pipeline (3 pasos):
+        1. INVERSION: la curva del test se invierte -> curva de compensacion que
+           tiende a aplanar el dispositivo (fuerte -> recorta, debil -> realza).
+        2. APLICACION: esa curva invertida se muestrea en las 9 bandas del EQ.
+        3. IA ENCIMA: la curva invertida se le pasa a la IA 2; sus filtros se
+           traducen a 9 ganancias y se SUMAN sobre la invertida. El total se
+           recorta a +-EQ_GAIN_LIMIT_DB.
+
     Devuelve:
-        bands   -> las 9 frecuencias del EQ del frontend
-        gains   -> 9 ganancias en dB (mismo orden), listas para `eqGains`
-        filters -> los filtros biquad crudos de la IA (por si se quieren mostrar)
+        bands    -> las 9 frecuencias del EQ del frontend
+        gains    -> 9 ganancias finales en dB (invertida + IA), listas para `eqGains`
+        inverted -> las 9 ganancias solo de la inversion (paso 1-2, para depurar)
+        filters  -> los filtros biquad crudos que aporto la IA encima
     """
-    curve = clarity_to_curve(results)#1.prueba a convertir la claridad del test (0-10) a una curva de 248 puntos, que es lo que el modelo espera como entrada.
-    model = _get_model()#2.carga el modelo de IA (si no está cargado ya) desde el disco. El modelo es un InverseEQ, que predice los filtros biquad a partir de la curva de frecuencias.
-    # DataFrame con los nombres de columna con que se entrenó (evita el warning
-    # de sklearn sobre "feature names").
-    X = pd.DataFrame([curve], columns=freq_columns())
-    filters = model.predict_filters(X)[0]#3.IA predice los filtros biquad a partir de la curva de frecuencias. La salida es una lista de dicts, con formato legible para el frontend.
-    gains = filters_to_eq_gains(filters)#4.traduce los filtros biquad crudos de la IA a las 9 ganancias que el frontend necesita para el ecualizador. La salida es una lista de 9 ganancias en dB, en el mismo orden que las frecuencias del EQ del frontend.
-    bands = [b["freq"] for b in EQ_BANDS_FRONTEND]
-    return {"bands": bands, "gains": gains, "filters": filters}
+    band_freqs = [b["freq"] for b in EQ_BANDS_FRONTEND]
+    lim = EQ_GAIN_LIMIT_DB
+
+    # 1-2) Curva invertida (248 pts) y su muestreo en las 9 bandas (interp log-freq).
+    inv_curve = test_to_inverted_curve(results)
+    log_grid = np.log10(FREQ_GRID)
+    inverted = np.clip(np.interp(np.log10(band_freqs), log_grid, inv_curve), -lim, lim)
+
+    # 3) La IA 2 trabaja ENCIMA de la curva invertida (no sobre la original).
+    model = _get_model()
+    X = pd.DataFrame([inv_curve], columns=freq_columns())
+    filters = model.predict_filters(X)[0]
+    ia_delta = np.array(filters_to_eq_gains(filters), dtype=float)
+
+    final = np.clip(inverted + ia_delta, -lim, lim)
+    return {
+        "bands": band_freqs,
+        "gains": [round(float(g), 1) for g in final],
+        "inverted": [round(float(g), 1) for g in inverted],
+        "filters": filters,
+    }

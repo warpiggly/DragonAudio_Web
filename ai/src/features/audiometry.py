@@ -76,3 +76,28 @@ def clarity_to_curve(
 def curve_as_dict(curva: np.ndarray) -> dict[str, float]:
     """Empareja la curva con los nombres de columna (util para depurar/serializar)."""
     return {c: float(v) for c, v in zip(freq_columns(), curva)}
+
+
+# Escala de inversion: dB de compensacion por cada punto de score (0-10) que la
+# banda se desvia de la media del test. Centrado en la media -> respuesta plana.
+DEFAULT_DB_PER_POINT = 1.5
+
+
+def test_to_inverted_curve(responses, db_per_point: float = DEFAULT_DB_PER_POINT) -> np.ndarray:
+    """Curva de COMPENSACION invertida (248 pts, dB) a partir del test.
+
+    Flattening: donde el dispositivo responde FUERTE (score alto) se recorta;
+    donde responde DEBIL (score bajo) se realza. Se centra en la media del test
+    para que la correccion sea neutra en nivel global, y luego se interpola en
+    frecuencia logaritmica sobre la malla de 248 puntos.
+
+    Esta es la curva que se aplica al EQ y, ademas, la que se le pasa a la IA 2
+    para que ajuste ENCIMA de ella (no sobre la curva original del test).
+    """
+    medidas = _normalize_responses(responses)  # {hz: score 0-10}
+    if not medidas:
+        raise ValueError("No se recibieron respuestas de la prueba.")
+    freqs = np.array(sorted(medidas), dtype=float)
+    scores = np.array([medidas[f] for f in freqs], dtype=float)
+    inv = -(scores - scores.mean()) * db_per_point   # fuerte -> -(cut) ; debil -> +(boost)
+    return np.interp(np.log10(FREQ_GRID), np.log10(freqs), inv)
