@@ -452,12 +452,6 @@ export default function MusicPlayer() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [volume, muted]);
 
-  // Redirige al test si no se ha calibrado.
-  useEffect(() => {
-    if (!localStorage.getItem('dragonTestCompleted')) {
-      navigate('/test');
-    }
-  }, [navigate]);
 
   // IA 2: si venimos de un test guardado, pedimos su EQ y precargamos las bandas.
   // Se aplica ANTES de activar el procesador, así arranca ya ecualizado.
