@@ -33,9 +33,31 @@ const DEFAULTS = {
 
 export default function MusicPlayer() {
   const navigate = useNavigate();
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
   const [visualMode, setVisualMode] = useState(
     () => localStorage.getItem('dragonVisualMode') || 'full'
   );
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    localStorage.removeItem('dragonTestCompleted');
+    localStorage.removeItem('dragonActiveTestId');
+    localStorage.removeItem('dragonVisualMode');
+    navigate('/');
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    if (menuOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
 
   const toggleVisualMode = () => {
     const next = visualMode === 'full' ? 'simple' : 'full';
@@ -579,6 +601,11 @@ export default function MusicPlayer() {
   return (
     <div className={visualMode === 'full' ? 'dragon-bg' : 'dragon-simple'} ref={bgRef} style={{ '--beat': 0 }}>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap');
+        @keyframes fadeSlideDown {
+          from { opacity: 0; transform: translateY(-6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
         @keyframes dragonShift {
           0%, 100% { background-position: 0% 0%, 100% 100%, 0% 50%; }
           50%      { background-position: 100% 100%, 0% 0%, 100% 50%; }
@@ -607,7 +634,7 @@ export default function MusicPlayer() {
             linear-gradient(135deg, #0a0405 0%, #18080a 50%, #0a0405 100%);
           background-size: 200% 200%, 200% 200%, 200% 200%;
           animation: dragonShift 22s ease-in-out infinite;
-          font-family: 'Segoe UI', system-ui, sans-serif;
+          font-family: 'Cinzel', serif;
         }
         /* 龙 — dragón gigante, marca de agua que se mece muy lento detrás de todo. */
         .dragon-watermark {
@@ -678,7 +705,7 @@ export default function MusicPlayer() {
           background-image:
             radial-gradient(circle at 50% 20%, rgba(100,10,16,0.45) 0%, transparent 55%),
             radial-gradient(circle at 80% 85%, rgba(40,5,8,0.5) 0%, transparent 45%);
-          font-family: 'Segoe UI', system-ui, sans-serif;
+          font-family: 'Cinzel', serif;
           color: #f0e6d2;
         }
         .dragon-simple .dragon-content { position: relative; z-index: 2; max-width: 820px; margin: 0 auto; padding: 0 16px; }
@@ -711,18 +738,121 @@ export default function MusicPlayer() {
         }}>龙</div>
       )}
 
+      {user.name && (
+        <div ref={menuRef} style={{ position: 'absolute', top: 16, right: 20, zIndex: 20 }}>
+          {/* Indicador clickeable */}
+          <button
+            onClick={() => setMenuOpen(o => !o)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: '4px 8px', borderRadius: 8,
+              fontSize: 12, letterSpacing: 0.8,
+              color: 'rgba(184,155,106,0.80)',
+              fontFamily: "'Cinzel', serif",
+              transition: 'color 0.2s',
+            }}
+          >
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: '#e8c36a',
+              boxShadow: '0 0 6px rgba(232,195,106,0.7)',
+            }} />
+            {user.name}
+            <span style={{
+              fontSize: 8, opacity: 0.6,
+              transform: menuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+              transition: 'transform 0.25s',
+              display: 'inline-block',
+            }}>▼</span>
+          </button>
+
+          {/* Dropdown */}
+          {menuOpen && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+              width: 230,
+              background: 'rgba(12, 5, 6, 0.97)',
+              border: '1px solid rgba(232,195,106,0.22)',
+              borderRadius: 12,
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.65), 0 0 24px rgba(120,10,20,0.2)',
+              overflow: 'hidden',
+              animation: 'fadeSlideDown 0.2s ease',
+            }}>
+              {/* Info usuario */}
+              <div style={{ padding: '18px 18px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{
+                  width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+                  background: 'rgba(232,195,106,0.12)',
+                  border: '1px solid rgba(232,195,106,0.35)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 17, fontWeight: 700, color: '#e8c36a',
+                  fontFamily: "'Cinzel', serif",
+                }}>
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ margin: 0, fontSize: 13, color: '#f0e6d2', fontWeight: 700, fontFamily: "'Cinzel', serif", letterSpacing: 0.5 }}>
+                    {user.name}
+                  </p>
+                  {user.email && (
+                    <p style={{ margin: '2px 0 0', fontSize: 11, color: 'rgba(184,155,106,0.65)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'sans-serif', letterSpacing: 0 }}>
+                      {user.email}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: 'rgba(232,195,106,0.12)', margin: '0 14px' }} />
+
+              {/* Botón logout */}
+              <div style={{ padding: '10px 10px 12px' }}>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    width: '100%', padding: '9px 14px',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: 'rgba(220,53,69,0.08)',
+                    border: '1px solid rgba(220,53,69,0.22)',
+                    borderRadius: 8, cursor: 'pointer',
+                    color: '#ff6b6b', fontSize: 13, fontWeight: 600,
+                    fontFamily: "'Cinzel', serif", letterSpacing: 0.5,
+                    transition: 'background 0.2s, border-color 0.2s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(220,53,69,0.18)'; e.currentTarget.style.borderColor = 'rgba(220,53,69,0.5)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(220,53,69,0.08)'; e.currentTarget.style.borderColor = 'rgba(220,53,69,0.22)'; }}
+                >
+                  <span style={{ fontSize: 15 }}>⏏</span>
+                  Cerrar Sesión
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="dragon-content">
         {/* Encabezado */}
         <header style={{ textAlign: 'center', padding: '34px 0 22px' }}>
-          <h1 className="dragon-title" style={{
-            margin: 0,
-            fontSize: 42,
-            letterSpacing: 4,
-            color: '#e8c36a',
-            animation: 'titleGlow 4s ease-in-out infinite',
-          }}>
-            🐉 DRAGON AUDIO
-          </h1>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <img
+              src="/logo.png"
+              alt="DragonAudio"
+              style={{ width: 72, height: 72, objectFit: 'contain', filter: 'drop-shadow(0 0 14px rgba(232,195,106,0.65))' }}
+            />
+            <h1 className="dragon-title" style={{
+              margin: 0,
+              fontSize: 42,
+              letterSpacing: 4,
+              color: '#e8c36a',
+              animation: 'titleGlow 4s ease-in-out infinite',
+            }}>
+              DRAGON AUDIO
+            </h1>
+          </div>
           <p className="dragon-sub" style={{ margin: '6px 0 0', fontSize: 18, color: '#c0392b', letterSpacing: 8, fontWeight: 700 }}>
             龙 之 音
           </p>

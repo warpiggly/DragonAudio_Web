@@ -1,0 +1,262 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Raleway:wght@300;400;500&display=swap');
+
+/* ── Página: fixed cubre todo el viewport sin importar el padre ───── */
+.login-page {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.login-video-bg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 100%;
+  min-height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+.login-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(10, 4, 5, 0.42) 0%,
+    rgba(18, 8, 10, 0.28) 50%,
+    rgba(10, 4, 5, 0.44) 100%
+  );
+  z-index: 1;
+}
+
+.login-container {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+}
+
+/* ── Wrapper: padding = espacio del borde animado ─────────────────── */
+.login-card-glow {
+  position: relative;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 420px;
+  padding: 2px;
+  background: rgba(232, 195, 106, 0.22);
+  transition: filter 0.5s ease, background 0.5s ease;
+}
+
+/* Gradiente chino: oro dragón → rojo bermellón → naranja → oro */
+.login-card-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  background: linear-gradient(
+    45deg,
+    #e8c36a, #6b0a10, #f0ad4e, #c0392b, #e8c36a, #6b0a10, #f0ad4e
+  );
+  background-size: 400% 400%;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.login-card-glow:hover::before {
+  opacity: 1;
+  animation: dragon-flow 3s linear infinite;
+}
+
+.login-card-glow:hover {
+  filter: drop-shadow(0 0 24px rgba(120, 10, 20, 0.55));
+}
+
+@keyframes dragon-flow {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ── Card: z-index:1 la pone sobre ::before ───────────────────────── */
+.login-card {
+  position: relative;
+  z-index: 1;
+  background: rgba(28, 10, 12, 0.10);
+  border: none;
+  border-radius: 18px;
+  padding: 48px 40px;
+  width: 81%;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  overflow: hidden;
+  transition:
+    background 0.5s ease,
+    backdrop-filter 0.5s ease,
+    box-shadow 0.5s ease,
+    transform 0.4s ease;
+}
+
+/* Un solo bloque de hover para la card */
+.login-card-glow:hover .login-card {
+  background: rgba(28, 10, 12, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    0 0 40px rgba(120, 10, 20, 0.35),
+    0 12px 40px rgba(0, 0, 0, 0.55);
+  transform: translateY(-3px);
+}
+
+/* Barrido de luz sobre la card al hover */
+.login-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -120%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(232, 195, 106, 0.06), transparent);
+  transform: skewX(-18deg);
+  pointer-events: none;
+  transition: left 0s;
+}
+
+.login-card-glow:hover .login-card::after {
+  left: 180%;
+  transition: left 0.75s ease;
+}
+
+/* ── Logo ────────────────────────────────────────────────────────── */
+.login-logo {
+  text-align: center;
+  margin-bottom: 36px;
+}
+
+.logo-img {
+  width: 110px;
+  height: 110px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 14px rgba(232, 195, 106, 0.65));
+  margin-bottom: 14px;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.login-title {
+  font-family: 'Cinzel', serif;
+  font-size: 2.1rem;
+  font-weight: 900;
+  color: #e8c36a;
+  text-shadow:
+    0 0 22px rgba(232, 195, 106, 0.5),
+    0 0 18px rgba(180, 30, 0, 0.4),
+    0 2px 4px rgba(0, 0, 0, 0.9);
+  letter-spacing: 0.15em;
+  margin: 0;
+}
+
+/* ── Error ───────────────────────────────────────────────────────── */
+.login-error {
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.875rem;
+  color: #ff6b6b;
+  text-align: center;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  background: rgba(220, 53, 69, 0.10);
+  border: 1px solid rgba(220, 53, 69, 0.35);
+  border-radius: 8px;
+}
+
+/* ── Formulario ──────────────────────────────────────────────────── */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-input,
+.login-btn {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.login-input {
+  padding: 12px 16px;
+  background: rgba(28, 10, 12, 0.55);
+  border: 1px solid rgba(232, 195, 106, 0.22);
+  border-radius: 9px;
+  color: #f0e6d2;
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.login-input::placeholder {
+  color: rgba(184, 155, 106, 0.55);
+}
+
+.login-input:focus {
+  border-color: rgba(232, 195, 106, 0.72);
+  box-shadow: 0 0 0 3px rgba(232, 195, 106, 0.13);
+  background: rgba(28, 10, 12, 0.70);
+}
+
+.login-btn {
+  padding: 13px;
+  background: linear-gradient(135deg, #b8860b 0%, #e8c36a 50%, #b8860b 100%);
+  background-size: 200% auto;
+  border: none;
+  border-radius: 9px;
+  color: #18080a;
+  font-family: 'Cinzel', serif;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(232, 195, 106, 0.22);
+  transition: background-position 0.4s, transform 0.15s, box-shadow 0.2s;
+}
+
+.login-btn:hover {
+  background-position: right center;
+  transform: translateY(-2px);
+  box-shadow: 0 7px 22px rgba(232, 195, 106, 0.38);
+}
+
+.login-btn:active {
+  transform: translateY(0);
+}
+
+/* ── Registro ────────────────────────────────────────────────────── */
+.login-register {
+  text-align: center;
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.875rem;
+  color: rgba(184, 155, 106, 0.68);
+  margin-top: 22px;
+  margin-bottom: 0;
+}
+
+.login-register a {
+  color: #e8c36a;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s, text-shadow 0.2s;
+}
+
+.login-register a:hover {
+  color: #f0e6d2;
+  text-shadow: 0 0 10px rgba(232, 195, 106, 0.5);
+}
