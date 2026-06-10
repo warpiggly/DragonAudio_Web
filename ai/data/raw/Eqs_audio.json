@@ -1,0 +1,402 @@
+[
+  {
+    "id": "harman_neutral",
+    "name": "Harman Neutral",
+    "category": "Reference",
+    "purpose": "Balanced sound based on Harman listener preference research.",
+    "best_for": ["All Genres", "Daily Listening", "Reference"],
+    "prompt": "Act as an audio engineer specialized in Harman target curves. Help users achieve a balanced and natural sound signature with slight bass enhancement and neutral mids.",
+    "eq": {
+      "31": 3,
+      "62": 3,
+      "125": 2,
+      "250": 0,
+      "500": 0,
+      "1000": 0,
+      "2000": 1,
+      "4000": 1,
+      "8000": 1,
+      "16000": 0
+    }
+  },
+  {
+    "id": "harman_warm",
+    "name": "Harman Warm",
+    "category": "Reference",
+    "purpose": "Warm and relaxed listening experience.",
+    "best_for": ["Jazz", "Acoustic", "Long Sessions"],
+    "prompt": "Act as a warm audio tuning specialist. Prioritize comfort, smooth highs, rich bass and low listening fatigue.",
+    "eq": {
+      "31": 5,
+      "62": 4,
+      "125": 3,
+      "250": 1,
+      "500": 0,
+      "1000": 0,
+      "2000": -1,
+      "4000": 0,
+      "8000": 0,
+      "16000": -1
+    }
+  },
+  {
+    "id": "harman_bright",
+    "name": "Harman Bright",
+    "category": "Reference",
+    "purpose": "Maximum clarity and detail retrieval.",
+    "best_for": ["Critical Listening", "Acoustic", "Classical"],
+    "prompt": "Act as an audio analyst focused on clarity, detail and instrument separation.",
+    "eq": {
+      "31": 2,
+      "62": 2,
+      "125": 1,
+      "250": 0,
+      "500": 0,
+      "1000": 0,
+      "2000": 2,
+      "4000": 3,
+      "8000": 2,
+      "16000": 1
+    }
+  },
+  {
+    "id": "vocal_clarity",
+    "name": "Vocal Clarity",
+    "category": "Voice",
+    "purpose": "Improve speech intelligibility.",
+    "best_for": ["Podcasts", "Vocals", "Meetings"],
+    "prompt": "Act as a speech enhancement engineer. Optimize clarity and vocal intelligibility.",
+    "eq": {
+      "31": -4,
+      "62": -3,
+      "125": -2,
+      "250": -1,
+      "500": 0,
+      "1000": 2,
+      "2000": 4,
+      "4000": 5,
+      "8000": 3,
+      "16000": 1
+    }
+  },
+  {
+    "id": "podcast_studio",
+    "name": "Podcast Studio",
+    "category": "Voice",
+    "purpose": "Broadcast-style voice enhancement.",
+    "best_for": ["Podcasts", "Audiobooks", "Speech"],
+    "prompt": "Act as a radio and podcast engineer focused on spoken word optimization.",
+    "eq": {
+      "31": -6,
+      "62": -4,
+      "125": -2,
+      "250": 0,
+      "500": 1,
+      "1000": 2,
+      "2000": 3,
+      "4000": 4,
+      "8000": 2,
+      "16000": 0
+    }
+  },
+  {
+    "id": "edm_festival",
+    "name": "EDM Festival",
+    "category": "Electronic",
+    "purpose": "Large festival sound with powerful bass and bright highs.",
+    "best_for": ["EDM", "House", "Festival Music"],
+    "prompt": "Act as a festival sound engineer. Prioritize impact, energy and crowd excitement.",
+    "eq": {
+      "31": 6,
+      "62": 5,
+      "125": 3,
+      "250": 0,
+      "500": -1,
+      "1000": -1,
+      "2000": 0,
+      "4000": 2,
+      "8000": 3,
+      "16000": 2
+    }
+  },
+  {
+    "id": "edm_club",
+    "name": "EDM Club",
+    "category": "Electronic",
+    "purpose": "Nightclub style sound.",
+    "best_for": ["EDM", "Techno", "Dance"],
+    "prompt": "Act as a nightclub sound engineer. Emphasize bass pressure and dance floor energy.",
+    "eq": {
+      "31": 8,
+      "62": 6,
+      "125": 3,
+      "250": 0,
+      "500": -2,
+      "1000": -2,
+      "2000": -1,
+      "4000": 1,
+      "8000": 2,
+      "16000": 1
+    }
+  },
+  {
+    "id": "deep_bass",
+    "name": "Deep Bass",
+    "category": "Electronic",
+    "purpose": "Maximum low-frequency impact.",
+    "best_for": ["Bass Music", "Dubstep", "Trap"],
+    "prompt": "Act as a bass specialist focused on sub-bass reproduction and impact.",
+    "eq": {
+      "31": 10,
+      "62": 7,
+      "125": 4,
+      "250": 1,
+      "500": 0,
+      "1000": 0,
+      "2000": 0,
+      "4000": 0,
+      "8000": 0,
+      "16000": 0
+    }
+  },
+  {
+    "id": "hiphop_modern",
+    "name": "Hip-Hop Modern",
+    "category": "Music",
+    "purpose": "Modern rap and hip-hop tuning.",
+    "best_for": ["Hip-Hop", "Rap", "Urban"],
+    "prompt": "Act as a modern hip-hop mix engineer. Prioritize 808s, punch and vocal presence.",
+    "eq": {
+      "31": 7,
+      "62": 5,
+      "125": 3,
+      "250": 0,
+      "500": 0,
+      "1000": 1,
+      "2000": 2,
+      "4000": 1,
+      "8000": 1,
+      "16000": 0
+    }
+  },
+  {
+    "id": "trap",
+    "name": "Trap",
+    "category": "Music",
+    "purpose": "Deep bass with crisp vocals.",
+    "best_for": ["Trap", "Drill", "Modern Rap"],
+    "prompt": "Act as a trap producer. Focus on sub-bass impact and vocal articulation.",
+    "eq": {
+      "31": 8,
+      "62": 6,
+      "125": 3,
+      "250": 0,
+      "500": -1,
+      "1000": 0,
+      "2000": 2,
+      "4000": 2,
+      "8000": 1,
+      "16000": 0
+    }
+  },
+  {
+    "id": "rock_classic",
+    "name": "Rock Classic",
+    "category": "Music",
+    "purpose": "Enhance guitars and live instruments.",
+    "best_for": ["Rock", "Classic Rock"],
+    "prompt": "Act as a rock mixing engineer. Prioritize guitars, drums and vocal presence.",
+    "eq": {
+      "31": 1,
+      "62": 2,
+      "125": 2,
+      "250": 1,
+      "500": 0,
+      "1000": 1,
+      "2000": 2,
+      "4000": 3,
+      "8000": 1,
+      "16000": 0
+    }
+  },
+  {
+    "id": "metal",
+    "name": "Metal",
+    "category": "Music",
+    "purpose": "Aggressive and detailed metal reproduction.",
+    "best_for": ["Metal", "Hard Rock"],
+    "prompt": "Act as a metal mastering engineer. Enhance attack, guitars and drum definition.",
+    "eq": {
+      "31": 3,
+      "62": 4,
+      "125": 3,
+      "250": 0,
+      "500": -1,
+      "1000": 1,
+      "2000": 3,
+      "4000": 4,
+      "8000": 2,
+      "16000": 0
+    }
+  },
+  {
+    "id": "pop_commercial",
+    "name": "Pop Commercial",
+    "category": "Music",
+    "purpose": "Modern mainstream tuning.",
+    "best_for": ["Pop", "Top 40"],
+    "prompt": "Act as a commercial pop engineer. Deliver a polished and exciting sound.",
+    "eq": {
+      "31": 4,
+      "62": 4,
+      "125": 2,
+      "250": 0,
+      "500": 0,
+      "1000": 1,
+      "2000": 2,
+      "4000": 2,
+      "8000": 2,
+      "16000": 1
+    }
+  },
+  {
+    "id": "jazz",
+    "name": "Jazz",
+    "category": "Reference",
+    "purpose": "Natural timbre and realism.",
+    "best_for": ["Jazz", "Acoustic"],
+    "prompt": "Act as a jazz recording engineer. Preserve realism and instrument tone.",
+    "eq": {
+      "31": 0,
+      "62": 1,
+      "125": 1,
+      "250": 1,
+      "500": 1,
+      "1000": 0,
+      "2000": 0,
+      "4000": 1,
+      "8000": 1,
+      "16000": 0
+    }
+  },
+  {
+    "id": "classical",
+    "name": "Classical",
+    "category": "Reference",
+    "purpose": "Neutral orchestral reproduction.",
+    "best_for": ["Classical", "Orchestra"],
+    "prompt": "Act as a classical music engineer. Preserve dynamics and tonal accuracy.",
+    "eq": {
+      "31": 0,
+      "62": 0,
+      "125": 0,
+      "250": 0,
+      "500": 0,
+      "1000": 0,
+      "2000": 0,
+      "4000": 0,
+      "8000": 0,
+      "16000": 0
+    }
+  },
+  {
+    "id": "gaming_fps",
+    "name": "Gaming FPS",
+    "category": "Gaming",
+    "purpose": "Footstep and directional awareness.",
+    "best_for": ["FPS Games", "Competitive Gaming"],
+    "prompt": "Act as an esports audio engineer. Maximize positional awareness and footsteps.",
+    "eq": {
+      "31": -2,
+      "62": -2,
+      "125": -1,
+      "250": 0,
+      "500": 0,
+      "1000": 2,
+      "2000": 4,
+      "4000": 5,
+      "8000": 4,
+      "16000": 2
+    }
+  },
+  {
+    "id": "gaming_cinematic",
+    "name": "Gaming Cinematic",
+    "category": "Gaming",
+    "purpose": "Immersive gaming experience.",
+    "best_for": ["RPG", "Adventure", "Movies"],
+    "prompt": "Act as a cinematic sound designer. Prioritize immersion and emotional impact.",
+    "eq": {
+      "31": 5,
+      "62": 4,
+      "125": 3,
+      "250": 0,
+      "500": 0,
+      "1000": 0,
+      "2000": 1,
+      "4000": 1,
+      "8000": 1,
+      "16000": 0
+    }
+  },
+  {
+    "id": "relax_chill",
+    "name": "Relax Chill",
+    "category": "Lifestyle",
+    "purpose": "Fatigue-free listening.",
+    "best_for": ["LoFi", "Ambient", "Study"],
+    "prompt": "Act as a relaxation audio engineer. Minimize fatigue and maximize comfort.",
+    "eq": {
+      "31": 3,
+      "62": 3,
+      "125": 2,
+      "250": 1,
+      "500": 1,
+      "1000": 0,
+      "2000": -1,
+      "4000": -1,
+      "8000": 0,
+      "16000": 0
+    }
+  },
+  {
+    "id": "studio_monitor",
+    "name": "Studio Monitor",
+    "category": "Reference",
+    "purpose": "Mix analysis and evaluation.",
+    "best_for": ["Mixing", "Analysis"],
+    "prompt": "Act as a studio monitor calibration specialist. Focus on transparency and flaw detection.",
+    "eq": {
+      "31": 1,
+      "62": 1,
+      "125": 0,
+      "250": 0,
+      "500": 0,
+      "1000": 0,
+      "2000": 1,
+      "4000": 1,
+      "8000": 0,
+      "16000": 0
+    }
+  },
+  {
+    "id": "mastering_reference",
+    "name": "Mastering Reference",
+    "category": "Reference",
+    "purpose": "Critical mastering evaluation.",
+    "best_for": ["Mastering", "Final Review"],
+    "prompt": "Act as a mastering engineer evaluating final mixes for tonal balance and translation.",
+    "eq": {
+      "31": 0,
+      "62": 1,
+      "125": 0,
+      "250": 0,
+      "500": 0,
+      "1000": 0,
+      "2000": 0,
+      "4000": 0,
+      "8000": 0,
+      "16000": -1
+    }
+  }
+]

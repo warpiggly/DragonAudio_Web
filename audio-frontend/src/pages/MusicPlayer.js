@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import API from '../api';
+import { EQ_PRESETS, PRESET_CATEGORIES, combineGains } from '../data/eqPresets';
 
 const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
 
@@ -26,9 +27,27 @@ const DEFAULTS = {
   eqGains: EQ_BANDS.map(() => 0), // 0 dB → curva plana (sin coloración)
   compThreshold: -24,              // dB sobre el que el compresor empieza a actuar
   compRatio: 4,                    // 4:1 → compresión moderada
+  reverbMix: 0,                    // 0 = sin reverb (señal seca) · 100 = solo reverb
+  reverbDecay: 2,                  // segundos que tarda la cola en apagarse
   pan: 0,                          // 0 = centro estéreo
   width: 1,                        // 1 = estéreo normal
   volume: 100,                     // 100 = ganancia unidad (nivel original)
+};
+
+// Impulso sintético para la reverb: ruido blanco estéreo con caída exponencial.
+// Evita cargar archivos de respuesta de impulso — suena a "sala" genérica y es
+// suficiente para una reverb simple. decay = segundos de cola.
+const makeReverbImpulse = (ctx, decay) => {
+  const rate = ctx.sampleRate;
+  const length = Math.max(1, Math.floor(rate * decay));
+  const impulse = ctx.createBuffer(2, length, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 2.5);
+    }
+  }
+  return impulse;
 };
 
 // ════════════════════════════════════════════════════════════════════════
@@ -358,6 +377,8 @@ export default function MusicPlayer() {
   const [eqGains, setEqGains] = useState(DEFAULTS.eqGains);              // ganancia dB por banda
   const [compThreshold, setCompThreshold] = useState(DEFAULTS.compThreshold);
   const [compRatio, setCompRatio] = useState(DEFAULTS.compRatio);
+  const [reverbMix, setReverbMix] = useState(DEFAULTS.reverbMix);      // 0..100 % wet
+  const [reverbDecay, setReverbDecay] = useState(DEFAULTS.reverbDecay); // 0.5..5 s
   const [pan, setPan] = useState(DEFAULTS.pan);                          // -1 izq · 0 centro · 1 der
   const [width, setWidth] = useState(DEFAULTS.width);                    // 0 mono · 1 normal · 2 amplio
   const [volume, setVolume] = useState(DEFAULTS.volume);                 // 0..600 % (master gain)
@@ -367,12 +388,12 @@ export default function MusicPlayer() {
   // solo = si hay AL MENOS un efecto en solo, solo esos quedan activos; el resto va a neutro.
   // El volumen master nunca se silencia por el solo de otro (sigue siendo el nivel de salida),
   // pero sí puede mutearse aparte o ponerse en solo para escuchar la señal sin EQ/comp/estéreo.
-  const [muted, setMuted] = useState({ eq: false, comp: false, stereo: false, volume: false });
-  const [solo, setSolo]   = useState({ eq: false, comp: false, stereo: false, volume: false });
+  const [muted, setMuted] = useState({ eq: false, comp: false, reverb: false, stereo: false, volume: false });
+  const [solo, setSolo]   = useState({ eq: false, comp: false, reverb: false, stereo: false, volume: false });
 
   // Decide si un efecto debe estar aplicando su procesado en este momento.
   const effectActive = (key) => {
-    const anySolo = solo.eq || solo.comp || solo.stereo || solo.volume;
+    const anySolo = solo.eq || solo.comp || solo.reverb || solo.stereo || solo.volume;
     return anySolo ? !!solo[key] : !muted[key];
   };
 
@@ -390,11 +411,24 @@ export default function MusicPlayer() {
     () => localStorage.getItem('dragonActiveTestId') || null
   );
 
+  // --- Ecualización temática (preset) que se SUMA encima de la curva del test/IA ---
+  // profileGains  = curva BASE (test invertido + IA). Si no hay test, son 0s.
+  // selectedPresetId = preset elegido por el usuario (o null = ninguno).
+  // El EQ real (eqGains) = combineGains(profileGains, selectedPresetId), recortado a ±12.
+  const [profileGains, setProfileGains] = useState(DEFAULTS.eqGains);
+  const [selectedPresetId, setSelectedPresetId] = useState(null);
+  const [presetCategory, setPresetCategory] = useState('Todas');
+
+  // Secciones plegables (abrir/cerrar).
+  const [profilesOpen, setProfilesOpen] = useState(true);
+  const [presetsOpen, setPresetsOpen] = useState(false);
+
   // --- Referencias a los nodos Web Audio (persisten entre renders, no disparan re-render) ---
   const audioCtxRef = useRef(null);     // AudioContext: motor del grafo de audio
   const streamRef = useRef(null);       // MediaStream capturado de la pestaña
   const eqFiltersRef = useRef([]);      // array de BiquadFilter, uno por banda del EQ
   const compressorRef = useRef(null);   // DynamicsCompressor: controla la dinámica
+  const reverbRef = useRef(null);       // { convolver, dry, wet }: reverb por convolución
   const pannerRef = useRef(null);       // StereoPanner: balance L/R
   const widthGainsRef = useRef(null);   // 4 GainNodes que cruzan canales (ancho estéreo)
   const masterGainRef = useRef(null);   // ganancia final antes de la salida
@@ -549,6 +583,10 @@ export default function MusicPlayer() {
           channelCount: 2,
           sampleRate: 48000,
           sampleSize: 16,
+          // Silencia la reproducción local de la pestaña capturada: el usuario
+          // solo oye la versión procesada del dragón, no la original a la vez.
+          // Al detener (track.stop) la pestaña recupera su audio sola.
+          suppressLocalAudioPlayback: true,
         },
       });
 
@@ -568,6 +606,7 @@ export default function MusicPlayer() {
           noiseSuppression: false,
           autoGainControl: false,
           channelCount: 2,
+          suppressLocalAudioPlayback: true,
         });
       } catch (_) {}
 
@@ -603,6 +642,18 @@ export default function MusicPlayer() {
       compressor.attack.value = 0.003;
       compressor.release.value = 0.25;
 
+      // --- 2b) Reverb por convolución (simple) ---
+      // La señal se divide en dos ramas paralelas: seca (dry) y reverberada (wet).
+      // El slider de mezcla cruza las dos ganancias; el impulso es ruido con
+      // caída exponencial generado al vuelo (makeReverbImpulse).
+      const convolver = ctx.createConvolver();
+      convolver.buffer = makeReverbImpulse(ctx, reverbDecay);
+      const dryGain = ctx.createGain();
+      const wetGain = ctx.createGain();
+      const revOn = effectActive('reverb');
+      dryGain.gain.value = revOn ? 1 - (reverbMix / 100) * 0.5 : 1; // la seca nunca baja de 0.5
+      wetGain.gain.value = revOn ? reverbMix / 100 : 0;
+
       // --- 3) Ancho estéreo (cross-mix L↔R) ---
       // Separamos canales con Splitter, los mezclamos con 4 GainNodes y los volvemos a unir.
       const splitter = ctx.createChannelSplitter(2);
@@ -626,12 +677,17 @@ export default function MusicPlayer() {
       const masterGain = ctx.createGain();
       masterGain.gain.value = volume / 100;
 
-      // --- Cableado de la cadena: source → filter[0] → ... → filter[N] → compressor ---
+      // --- Cableado: source → EQ → (dry ∥ convolver→wet) → compressor → ... ---
       source.connect(filters[0]);
       for (let i = 0; i < filters.length - 1; i++) {
         filters[i].connect(filters[i + 1]);
       }
-      filters[filters.length - 1].connect(compressor);
+      const lastFilter = filters[filters.length - 1];
+      lastFilter.connect(dryGain);
+      lastFilter.connect(convolver);
+      convolver.connect(wetGain);
+      dryGain.connect(compressor);
+      wetGain.connect(compressor);
       compressor.connect(splitter);
 
       // Cross-mix del ancho estéreo
@@ -663,6 +719,7 @@ export default function MusicPlayer() {
       streamRef.current = stream;
       eqFiltersRef.current = filters;
       compressorRef.current = compressor;
+      reverbRef.current = { convolver, dry: dryGain, wet: wetGain };
       pannerRef.current = panner;
       widthGainsRef.current = { LL: gLL, RR: gRR, LR: gLR, RL: gRL };
       masterGainRef.current = masterGain;
@@ -696,6 +753,7 @@ export default function MusicPlayer() {
     }
     eqFiltersRef.current = [];
     compressorRef.current = null;
+    reverbRef.current = null;
     pannerRef.current = null;
     widthGainsRef.current = null;
     masterGainRef.current = null;
@@ -732,6 +790,21 @@ export default function MusicPlayer() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compThreshold, compRatio, muted, solo]);
   useEffect(() => {
+    const r = reverbRef.current;
+    if (!r) return;
+    const on = effectActive('reverb');           // si está off → 100% señal seca
+    r.dry.gain.value = on ? 1 - (reverbMix / 100) * 0.5 : 1;
+    r.wet.gain.value = on ? reverbMix / 100 : 0;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reverbMix, muted, solo]);
+  useEffect(() => {
+    // Cambiar la duración regenera el impulso (operación puntual, no por frame).
+    const r = reverbRef.current;
+    if (r && audioCtxRef.current) {
+      r.convolver.buffer = makeReverbImpulse(audioCtxRef.current, reverbDecay);
+    }
+  }, [reverbDecay]);
+  useEffect(() => {
     const on = effectActive('stereo');             // si está off → pan centrado y ancho normal
     if (pannerRef.current) pannerRef.current.pan.value = on ? pan : 0;
     applyWidth(on ? width : 1);
@@ -767,7 +840,9 @@ export default function MusicPlayer() {
       const res = await axios.get(`${API}/tests/${id}/eq`, authHeader());
       const g = res.data.gains;
       if (Array.isArray(g) && g.length === DEFAULTS.eqGains.length) {
-        setEqGains(g.map(v => Math.round(v)));   // sliders enteros (-12..12)
+        const base = g.map(v => Math.round(v));
+        setProfileGains(base);                            // curva base del test/IA
+        setEqGains(combineGains(base, selectedPresetId)); // base + preset (si hay)
         setActiveProfileId(String(id));
         localStorage.setItem('dragonActiveTestId', String(id));
         setIaMsg('🤖 EQ = curva invertida de tu test + ajuste de la IA. Puedes afinarlo a mano.');
@@ -775,6 +850,24 @@ export default function MusicPlayer() {
     } catch (e) {
       setIaMsg('');   // sin sesión / sin modelo: se queda como esté
     }
+  };
+
+  // Aplica (o quita) una ecualización temática ENCIMA de la curva base del test/IA.
+  // Volver a pulsar el preset activo lo desactiva (vuelve a la curva base sola).
+  const applyPreset = (id) => {
+    const next = selectedPresetId === id ? null : id;
+    setSelectedPresetId(next);
+    setEqGains(combineGains(profileGains, next));
+  };
+
+  // Quita el perfil de dispositivo activo: la curva base vuelve a plana (0 dB).
+  // Si hay un preset puesto, se conserva (queda solo el preset).
+  const clearProfile = () => {
+    setProfileGains(DEFAULTS.eqGains);
+    setEqGains(combineGains(DEFAULTS.eqGains, selectedPresetId));
+    setActiveProfileId(null);
+    localStorage.removeItem('dragonActiveTestId');
+    setIaMsg('');
   };
 
   // Al montar: carga la lista de perfiles y aplica el activo (si venimos de un test).
@@ -863,6 +956,21 @@ export default function MusicPlayer() {
         style={muteBtnStyle(muted[key])}
       >M</button>
     </span>
+  );
+
+  // Cabecera plegable: clic en cualquier parte abre/cierra. `extra` (botones a la
+  // derecha, p.ej. ✕ Quitar) frena la propagación para no togglear al pulsarlo.
+  const collapsibleHeader = (title, open, setOpen, extra = null) => (
+    <div
+      onClick={() => setOpen((o) => !o)}
+      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', gap: 8, marginBottom: open ? 12 : 0 }}
+    >
+      <h3 style={{ ...sectionTitle, margin: 0 }}>{title}</h3>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {extra}
+        <span style={{ fontSize: 11, color: '#e8c36a', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+      </span>
+    </div>
   );
 
   // Cabecera de sección: título + botones Solo/Mute alineados a la derecha.
@@ -1240,45 +1348,157 @@ export default function MusicPlayer() {
           </div>
         )}
 
-        {/* Botón principal: pide permiso de captura o detiene el procesador. */}
-        <div style={{ marginBottom: 15 }}>
+        {/* Botón principal: pide permiso de captura o detiene el procesador.
+            Estética VST/dragón: panel oscuro, borde dorado, "LED de power" y
+            tipografía Cinzel en mayúsculas. Sin emojis. */}
+        <div style={{ marginBottom: 15, display: 'flex', justifyContent: 'center' }}>
           {!eqActive ? (
             <button
               onClick={startEqualizer}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#e8c36a';
+                e.currentTarget.style.boxShadow = '0 0 34px rgba(232,195,106,0.45), inset 0 0 22px rgba(120,10,20,0.3)';
+                e.currentTarget.style.transform = 'translateY(-1px)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(232,195,106,0.55)';
+                e.currentTarget.style.boxShadow = '0 0 22px rgba(232,195,106,0.22), inset 0 0 18px rgba(120,10,20,0.28)';
+                e.currentTarget.style.transform = 'none';
+              }}
               style={{
-                padding: '10px 20px',
-                background: '#28a745',
-                color: 'white',
-                border: 'none',
-                borderRadius: 5,
+                display: 'inline-flex', alignItems: 'center', gap: 13,
+                padding: '14px 34px',
+                background: 'linear-gradient(135deg, rgba(232,195,106,0.16), rgba(120,10,20,0.22))',
+                border: '1px solid rgba(232,195,106,0.55)',
+                borderRadius: 10,
+                color: '#f0d68a',
+                fontFamily: "'Cinzel', serif",
+                fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase',
                 cursor: 'pointer',
+                boxShadow: '0 0 22px rgba(232,195,106,0.22), inset 0 0 18px rgba(120,10,20,0.28)',
+                transition: 'all 0.2s ease',
               }}
             >
-              ▶️ Activar (compartir pestaña con audio)
+              {/* LED de power dorado-brasa */}
+              <span style={{
+                width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+                background: 'radial-gradient(circle, #f4cf6b 0%, #c0392b 85%)',
+                boxShadow: '0 0 8px rgba(244,207,107,0.95), 0 0 16px rgba(192,57,43,0.65)',
+              }} />
+              Capturar Audio
             </button>
           ) : (
             <button
               onClick={stopEqualizer}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#dc3545';
+                e.currentTarget.style.boxShadow = '0 0 32px rgba(220,53,69,0.5), inset 0 0 20px rgba(80,5,8,0.4)';
+                e.currentTarget.style.transform = 'translateY(-1px)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(220,53,69,0.55)';
+                e.currentTarget.style.boxShadow = '0 0 20px rgba(220,53,69,0.28), inset 0 0 18px rgba(80,5,8,0.35)';
+                e.currentTarget.style.transform = 'none';
+              }}
               style={{
-                padding: '10px 20px',
-                background: '#dc3545',
-                color: 'white',
-                border: 'none',
-                borderRadius: 5,
+                display: 'inline-flex', alignItems: 'center', gap: 13,
+                padding: '14px 34px',
+                background: 'linear-gradient(135deg, rgba(192,57,43,0.28), rgba(80,5,8,0.35))',
+                border: '1px solid rgba(220,53,69,0.55)',
+                borderRadius: 10,
+                color: '#ff9b8a',
+                fontFamily: "'Cinzel', serif",
+                fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase',
                 cursor: 'pointer',
+                boxShadow: '0 0 20px rgba(220,53,69,0.28), inset 0 0 18px rgba(80,5,8,0.35)',
+                transition: 'all 0.2s ease',
               }}
             >
-              ⏹️ Detener
+              {/* Indicador "stop" cuadrado en brasa roja */}
+              <span style={{
+                width: 9, height: 9, borderRadius: 2, flexShrink: 0,
+                background: 'linear-gradient(135deg, #ff6b5a, #c0392b)',
+                boxShadow: '0 0 8px rgba(220,53,69,0.95), 0 0 16px rgba(120,10,20,0.7)',
+              }} />
+              Detener Captura
             </button>
           )}
           {eqError && <p style={{ color: 'red', marginTop: 8 }}>{eqError}</p>}
         </div>
 
+        {/* Los efectos solo aparecen DESPUÉS de capturar una página con audio. */}
+        {!eqActive && (
+          <div style={{
+            padding: '28px 20px', textAlign: 'center', borderRadius: 10,
+            background: 'rgba(28,10,12,0.4)', border: '1px dashed rgba(232,195,106,0.25)',
+            color: '#8a7a60', fontSize: 13, lineHeight: 1.6,
+          }}>
+            🐉 Pulsa <b style={{ color: '#e8c36a' }}>🎧 Capturar página de audio</b> y elige la pestaña con tu música.<br />
+            Los controles (perfiles, ecualizaciones, compresor, estéreo y volumen) aparecerán al capturar.
+          </div>
+        )}
+
+        {eqActive && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {/* Volumen master — ganancia final + avisos de seguridad auditiva. */}
+          <div
+            style={{
+              ...sectionStyle,
+              gridColumn: '1 / -1',
+              borderColor:
+                volume > 300 ? '#dc3545' : volume > 100 ? '#f0ad4e' : 'rgba(232,195,106,0.22)',
+            }}
+          >
+            {effectHeader('Volumen master', 'volume')}
+            {muted.volume && (
+              <p style={{ fontSize: 12, color: '#ff6b6b', margin: '0 0 10px', fontWeight: 600 }}>
+                🔇 Silenciado (Mute activo) — no sale audio aunque subas el volumen.
+              </p>
+            )}
+            <div style={{ marginBottom: 12 }}>
+              {/* Botón de reset a 100 (la perilla no tiene su propio ↺) */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 2 }}>
+                <button
+                  type="button"
+                  onClick={() => setVolume(DEFAULTS.volume)}
+                  title="Restablecer a 100 (original)"
+                  style={resetBtnStyle}
+                >↺ 100</button>
+              </div>
+              <VolumeKnob volume={volume} setVolume={setVolume} />
+            </div>
+
+            {volume > 100 && volume <= 300 && (
+              <div style={{ background: '#fff3cd', border: '1px solid #f0ad4e', padding: 10, borderRadius: 6, fontSize: 12, color: '#7a5a00' }}>
+                ⚠️ <b>Estás amplificando por encima del nivel original.</b> Puede haber distorsión y el sonido es más fuerte de lo que tu sistema entrega normalmente. Cuida tus oídos y tus parlantes.
+              </div>
+            )}
+            {volume > 300 && (
+              <div style={{ background: '#f8d7da', border: '2px solid #dc3545', padding: 12, borderRadius: 6, fontSize: 12, color: '#721c24' }}>
+                🚨 <b>VOLUMEN PELIGROSO.</b> Escuchar música por encima de 85 dB durante períodos prolongados puede causar <b>pérdida auditiva permanente</b>. A este nivel también puedes <b>quemar audífonos o parlantes</b> y la señal va a estar fuertemente distorsionada (clipping). Úsalo solo unos segundos y a volumen razonable en tus altavoces.
+              </div>
+            )}
+          </div>
+
           {/* Perfiles: cambia entre dispositivos calibrados sin repetir el test. */}
           <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
-            <h3 style={sectionTitle}>🎚️ Perfiles de tus dispositivos</h3>
-            {profiles.length === 0 ? (
+            {collapsibleHeader(
+              '🎚️ Perfiles de tus dispositivos',
+              profilesOpen,
+              setProfilesOpen,
+              activeProfileId && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); clearProfile(); }}
+                  title="Quitar el test de dispositivo activo (EQ base vuelve a plano)"
+                  style={{
+                    ...resetBtnStyle, padding: '3px 12px', fontSize: 12, lineHeight: '16px',
+                    background: 'rgba(220,53,69,0.12)', borderColor: 'rgba(220,53,69,0.4)', color: '#ff8a8a',
+                  }}
+                >✕ Quitar test</button>
+              )
+            )}
+            {profilesOpen && (profiles.length === 0 ? (
               <p style={{ fontSize: 12, color: '#8a7a60', margin: 0 }}>
                 Aún no tienes perfiles. Pulsa 🔬 Recalibrar, haz el test y guárdalo para crear uno.
               </p>
@@ -1307,7 +1527,92 @@ export default function MusicPlayer() {
                   );
                 })}
               </div>
+            ))}
+          </div>
+
+          {/* Ecualizaciones temáticas: curvas predefinidas que se SUMAN sobre el test/IA. */}
+          <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
+            {collapsibleHeader(
+              '🎵 Ecualizaciones temáticas',
+              presetsOpen,
+              setPresetsOpen,
+              selectedPresetId && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); applyPreset(selectedPresetId); }}
+                  title="Quitar la ecualización temática y volver solo a tu test"
+                  style={{
+                    ...resetBtnStyle, padding: '3px 12px', fontSize: 12, lineHeight: '16px',
+                    background: 'rgba(220,53,69,0.12)', borderColor: 'rgba(220,53,69,0.4)', color: '#ff8a8a',
+                  }}
+                >✕ Quitar</button>
+              )
             )}
+            {presetsOpen && (<>
+            <p style={{ fontSize: 12, color: '#8a7a60', margin: '0 0 12px' }}>
+              Elige un sonido para tu música. Se <b style={{ color: '#c0a878' }}>suma encima</b> de la
+              curva de tu test{activeProfileId ? '' : ' (o úsala sola si aún no tienes uno)'} y puedes afinar a mano después.
+            </p>
+
+            {/* Chips de categoría */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {['Todas', ...PRESET_CATEGORIES].map((cat) => {
+                const active = presetCategory === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setPresetCategory(cat)}
+                    style={{
+                      padding: '4px 12px', borderRadius: 14, cursor: 'pointer', fontSize: 11,
+                      fontFamily: "'Cinzel', serif", letterSpacing: 0.5, transition: 'all 0.15s',
+                      background: active ? 'rgba(232,195,106,0.2)' : 'rgba(28,10,12,0.5)',
+                      border: `1px solid ${active ? '#e8c36a' : 'rgba(232,195,106,0.22)'}`,
+                      color: active ? '#f0d68a' : '#8a7a60', fontWeight: active ? 700 : 500,
+                    }}
+                  >{cat}</button>
+                );
+              })}
+            </div>
+
+            {/* Tarjetas de preset */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
+              {EQ_PRESETS
+                .filter((p) => presetCategory === 'Todas' || p.category === presetCategory)
+                .map((p) => {
+                  const active = selectedPresetId === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyPreset(p.id)}
+                      title={p.purpose}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4,
+                        padding: '10px 12px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                        background: active ? 'linear-gradient(135deg, #7a1515, #c0392b)' : 'rgba(28,10,12,0.5)',
+                        border: `1px solid ${active ? '#e8c36a' : 'rgba(232,195,106,0.2)'}`,
+                        color: active ? '#fff' : '#c0a878',
+                        boxShadow: active ? '0 0 16px rgba(232,195,106,0.4)' : 'none',
+                        transition: 'all 0.15s', fontFamily: "'Cinzel', serif",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>{active ? '🟢' : '🎵'} {p.name}</span>
+                      <span style={{ fontSize: 10, opacity: 0.85, lineHeight: 1.35, fontFamily: 'sans-serif' }}>{p.purpose}</span>
+                      <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                        {p.best_for.map((b) => (
+                          <span key={b} style={{
+                            fontSize: 9, padding: '1px 6px', borderRadius: 8, fontFamily: 'sans-serif',
+                            background: active ? 'rgba(255,255,255,0.18)' : 'rgba(232,195,106,0.1)',
+                            color: active ? '#ffe9c2' : '#9a895f',
+                          }}>{b}</span>
+                        ))}
+                      </span>
+                    </button>
+                  );
+                })}
+            </div>
+            </>)}
           </div>
 
           {/* EQ gráfico — 9 sliders verticales en fila, estilo ecualizador hardware clásico. */}
@@ -1435,46 +1740,20 @@ export default function MusicPlayer() {
             </div>
           </div>
 
-          {/* Volumen master — ganancia final + avisos de seguridad auditiva. */}
-          <div
-            style={{
-              ...sectionStyle,
-              gridColumn: '1 / -1',
-              borderColor:
-                volume > 300 ? '#dc3545' : volume > 100 ? '#f0ad4e' : 'rgba(232,195,106,0.22)',
-            }}
-          >
-            {effectHeader('Volumen master', 'volume')}
-            {muted.volume && (
-              <p style={{ fontSize: 12, color: '#ff6b6b', margin: '0 0 10px', fontWeight: 600 }}>
-                🔇 Silenciado (Mute activo) — no sale audio aunque subas el volumen.
-              </p>
-            )}
-            <div style={{ marginBottom: 12 }}>
-              {/* Botón de reset a 100 (la perilla no tiene su propio ↺) */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 2 }}>
-                <button
-                  type="button"
-                  onClick={() => setVolume(DEFAULTS.volume)}
-                  title="Restablecer a 100 (original)"
-                  style={resetBtnStyle}
-                >↺ 100</button>
-              </div>
-              <VolumeKnob volume={volume} setVolume={setVolume} />
+          {/* Reverb — convolución simple con impulso sintético (mezcla dry/wet + cola). */}
+          <div style={{ ...sectionStyle, gridColumn: '1 / -1' }}>
+            {effectHeader('Reverb', 'reverb')}
+            <div style={{ opacity: effectActive('reverb') ? 1 : 0.4, transition: 'opacity 0.2s' }}>
+            {slider('Mezcla (seco ← → reverberado)', reverbMix, setReverbMix, 0, 100, 1, ' %', DEFAULTS.reverbMix)}
+            {slider('Cola (duración de la sala)', reverbDecay, setReverbDecay, 0.5, 5, 0.1, ' s', DEFAULTS.reverbDecay)}
+            <p style={{ fontSize: 11, color: '#888', margin: 0 }}>
+              Mezcla 0% = sin efecto. Cola corta = habitación pequeña · larga = catedral.
+            </p>
             </div>
-
-            {volume > 100 && volume <= 300 && (
-              <div style={{ background: '#fff3cd', border: '1px solid #f0ad4e', padding: 10, borderRadius: 6, fontSize: 12, color: '#7a5a00' }}>
-                ⚠️ <b>Estás amplificando por encima del nivel original.</b> Puede haber distorsión y el sonido es más fuerte de lo que tu sistema entrega normalmente. Cuida tus oídos y tus parlantes.
-              </div>
-            )}
-            {volume > 300 && (
-              <div style={{ background: '#f8d7da', border: '2px solid #dc3545', padding: 12, borderRadius: 6, fontSize: 12, color: '#721c24' }}>
-                🚨 <b>VOLUMEN PELIGROSO.</b> Escuchar música por encima de 85 dB durante períodos prolongados puede causar <b>pérdida auditiva permanente</b>. A este nivel también puedes <b>quemar audífonos o parlantes</b> y la señal va a estar fuertemente distorsionada (clipping). Úsalo solo unos segundos y a volumen razonable en tus altavoces.
-              </div>
-            )}
           </div>
+
         </div>
+        )}
 
         <ul style={{ fontSize: 12, color: '#b89b6a', paddingLeft: 18, marginTop: 12 }}>
           <li>Funciona en Chrome, Edge y Brave. No en Firefox ni Safari.</li>
@@ -1482,7 +1761,7 @@ export default function MusicPlayer() {
             En el diálogo elige <b style={{ color: '#e8c36a' }}>"Pestaña de Chrome"</b>, selecciona la pestaña con tu música y activa <b style={{ color: '#e8c36a' }}>"Compartir audio de la pestaña"</b>.
           </li>
           <li>
-            El dragón reproduce su propia versión filtrada del audio: baja el volumen de la pestaña original para no oír las dos a la vez.
+            La pestaña original se <b style={{ color: '#e8c36a' }}>silencia sola</b> mientras capturas (oyes solo la versión del dragón). Al pulsar <b style={{ color: '#e8c36a' }}>Detener</b> recupera su sonido.
           </li>
         </ul>
       </div>
