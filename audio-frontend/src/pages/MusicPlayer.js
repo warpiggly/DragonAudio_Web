@@ -3,341 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import API from '../api';
 import { EQ_PRESETS, PRESET_CATEGORIES, combineGains } from '../data/eqPresets';
+import VolumeKnob from '../components/VolumeKnob';
+import { DEFAULTS } from '../audio/defaults';
+import { buildChain } from '../audio/audioChain';
+import { captureTabAudio, NO_AUDIO } from '../audio/capture';
+import { createVisualizerLoop, paintIdle } from '../audio/visualizer';
+import * as equalizer from '../audio/effects/equalizer';
+import * as reverb from '../audio/effects/reverb';
+import * as compressor from '../audio/effects/compressor';
+import * as stereo from '../audio/effects/stereo';
+import * as masterVolume from '../audio/effects/masterVolume';
+import './MusicPlayer.css';
+
+const { EQ_BANDS } = equalizer;
 
 const authHeader = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
-
-// ---- Configuración del EQ gráfico (9 bandas ISO 1-octava) ----
-// Cada índice = 1 BiquadFilter encadenado en serie sobre la señal.
-// Lowshelf en el extremo grave, highshelf en el extremo agudo,
-// peaking (campana) en las bandas centrales con Q ≈ 1.41 (~1/2 octava).
-const EQ_BANDS = [
-  { freq: 31,   label: '31 Hz',  type: 'lowshelf'  },
-  { freq: 63,   label: '63 Hz',  type: 'peaking'   },
-  { freq: 125,  label: '125 Hz', type: 'peaking'   },
-  { freq: 250,  label: '250 Hz', type: 'peaking'   },
-  { freq: 500,  label: '500 Hz', type: 'peaking'   },
-  { freq: 1000, label: '1 kHz',  type: 'peaking'   },
-  { freq: 2000, label: '2 kHz',  type: 'peaking'   },
-  { freq: 4000, label: '4 kHz',  type: 'peaking'   },
-  { freq: 8000, label: '8 kHz',  type: 'highshelf' },
-];
-
-// Valores por defecto — referencia única usada por los botones ↺ (reset).
-const DEFAULTS = {
-  eqGains: EQ_BANDS.map(() => 0), // 0 dB → curva plana (sin coloración)
-  compThreshold: -24,              // dB sobre el que el compresor empieza a actuar
-  compRatio: 4,                    // 4:1 → compresión moderada
-  reverbMix: 0,                    // 0 = sin reverb (señal seca) · 100 = solo reverb
-  reverbDecay: 2,                  // segundos que tarda la cola en apagarse
-  pan: 0,                          // 0 = centro estéreo
-  width: 1,                        // 1 = estéreo normal
-  volume: 100,                     // 100 = ganancia unidad (nivel original)
-};
-
-// Impulso sintético para la reverb: ruido blanco estéreo con caída exponencial.
-// Evita cargar archivos de respuesta de impulso — suena a "sala" genérica y es
-// suficiente para una reverb simple. decay = segundos de cola.
-const makeReverbImpulse = (ctx, decay) => {
-  const rate = ctx.sampleRate;
-  const length = Math.max(1, Math.floor(rate * decay));
-  const impulse = ctx.createBuffer(2, length, rate);
-  for (let ch = 0; ch < 2; ch++) {
-    const data = impulse.getChannelData(ch);
-    for (let i = 0; i < length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 2.5);
-    }
-  }
-  return impulse;
-};
-
-// ════════════════════════════════════════════════════════════════════════
-//  PERILLA DE VOLUMEN — "dial dragón"
-//  Reemplaza el slider 0..600 por la perilla giratoria del diseño.
-//
-//  Geometría MEDIDA sobre las imágenes (ambas 1312×816, el knob ya viene
-//  colocado en su sitio dentro del lienzo, así que se superpone 1:1):
-//    · centro del knob = (30.26%, 52.76%)
-//    · arco NEGRO  (zona normal, vol 0→100):  −122°  →  0°  (sube por la izq. hasta arriba)
-//    · arco ROJO   (zona fuerte, vol 100→600):   0°  → +122° (baja por la derecha)
-//  Ángulo 0° = arriba; positivo = sentido horario. El indicador rojo del
-//  knob apunta hacia arriba en reposo, así que girar el knob θ° = apuntar a θ°.
-// ════════════════════════════════════════════════════════════════════════
-const KNOB = { cx: 0.3026, cy: 0.5276, imgW: 1312, imgH: 816, cxPx: 397, cyPx: 430.5 };
-const ARC  = { aStart: -122, aMid: 0, aEnd: 122, vMin: 0, vMid: 100, vMax: 600, r: 168 };
-
-const clampVol = (v) => Math.max(ARC.vMin, Math.min(ARC.vMax, v));
-
-// volumen → ángulo (dos tramos lineales: el negro y el rojo del diseño)
-const volToAngle = (v) =>
-  v <= ARC.vMid
-    ? ARC.aStart + ((v - ARC.vMin) / (ARC.vMid - ARC.vMin)) * (ARC.aMid - ARC.aStart)
-    : ARC.aMid + ((v - ARC.vMid) / (ARC.vMax - ARC.vMid)) * (ARC.aEnd - ARC.aMid);
-
-// ángulo → volumen (para el arrastre). El hueco inferior se redondea al extremo más cercano.
-const angleToVol = (a) => {
-  if (a > ARC.aEnd) a = ARC.aEnd;        // pasó el tope derecho → 600
-  if (a < ARC.aStart) a = ARC.aStart;    // pasó el tope izquierdo → 0
-  return Math.round(
-    a <= ARC.aMid
-      ? ARC.vMin + ((a - ARC.aStart) / (ARC.aMid - ARC.aStart)) * (ARC.vMid - ARC.vMin)
-      : ARC.vMid + ((a - ARC.aMid) / (ARC.aEnd - ARC.aMid)) * (ARC.vMax - ARC.vMid)
-  );
-};
-
-// punto polar en coordenadas de la imagen (0°=arriba, horario+)
-const polar = (deg, r) => {
-  const rad = (deg * Math.PI) / 180;
-  return [KNOB.cxPx + r * Math.sin(rad), KNOB.cyPx - r * Math.cos(rad)];
-};
-// path SVG de un arco entre dos ángulos
-const arcPath = (a0, a1, r) => {
-  if (Math.abs(a1 - a0) < 0.1) return '';
-  const [x0, y0] = polar(a0, r);
-  const [x1, y1] = polar(a1, r);
-  const large = Math.abs(a1 - a0) > 180 ? 1 : 0;
-  const sweep = a1 > a0 ? 1 : 0;
-  return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${large} ${sweep} ${x1.toFixed(1)} ${y1.toFixed(1)}`;
-};
-
-// Etiquetas numéricas alrededor del arco. (radio un poco mayor que el arco)
-const KNOB_LABELS = [0, 50, 100, 200, 300, 450, 600];
-const LABEL_R = 232;
-
-function VolumeKnob({ volume, setVolume }) {
-  const boxRef = useRef(null);
-  const draggingRef = useRef(false);
-
-  const angle = volToAngle(volume);
-  const n = volume / ARC.vMax;                         // 0..1, "cuánta caña"
-  const inRed = volume > ARC.vMid;
-  const glowColor = volume > 300 ? '#ff2d2d' : inRed ? '#ff8a3d' : '#e8c36a';
-  const glow = 0.22 + n * 0.78;                        // intensidad base del resplandor
-
-  // Convierte la posición del puntero en volumen (respecto al centro del knob).
-  const pointerToVolume = (clientX, clientY) => {
-    const box = boxRef.current;
-    if (!box) return;
-    const rect = box.getBoundingClientRect();
-    const cx = rect.left + rect.width * KNOB.cx;
-    const cy = rect.top + rect.height * KNOB.cy;
-    const a = (Math.atan2(clientX - cx, -(clientY - cy)) * 180) / Math.PI; // 0=arriba, horario+
-    setVolume(angleToVol(a));
-  };
-
-  const onDown = (e) => {
-    draggingRef.current = true;
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
-    pointerToVolume(e.clientX, e.clientY);
-  };
-  const onMove = (e) => { if (draggingRef.current) pointerToVolume(e.clientX, e.clientY); };
-  const onUp = (e) => {
-    draggingRef.current = false;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
-  };
-
-  // Rueda del ratón sobre la perilla = ajuste fino (listener nativo no-pasivo para poder
-  // bloquear el scroll de la página mientras se gira).
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el) return;
-    const onWheel = (e) => {
-      e.preventDefault();
-      setVolume((v) => clampVol(v + (e.deltaY < 0 ? 5 : -5)));
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [setVolume]);
-
-  // Teclado (accesibilidad): flechas ±5, Re/Av Pág ±25, Inicio/Fin = mín/máx.
-  const onKeyDown = (e) => {
-    const map = { ArrowUp: 5, ArrowRight: 5, ArrowDown: -5, ArrowLeft: -5, PageUp: 25, PageDown: -25 };
-    if (e.key in map) { e.preventDefault(); setVolume((v) => clampVol(v + map[e.key])); }
-    else if (e.key === 'Home') { e.preventDefault(); setVolume(ARC.vMin); }
-    else if (e.key === 'End') { e.preventDefault(); setVolume(ARC.vMax); }
-  };
-
-  const goldEnd = Math.min(angle, ARC.aMid);           // tramo negro/dorado lleno (0..100)
-  const zoneLabel = volume > 300 ? 'PELIGROSO' : inRed ? 'AMPLIFICADO' : volume === ARC.vMid ? 'ORIGINAL' : 'NORMAL';
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <div
-        ref={boxRef}
-        role="slider"
-        aria-label="Volumen master"
-        aria-valuemin={ARC.vMin}
-        aria-valuemax={ARC.vMax}
-        aria-valuenow={volume}
-        tabIndex={0}
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerCancel={onUp}
-        onKeyDown={onKeyDown}
-        style={{
-          position: 'relative',
-          width: '100%',
-          maxWidth: 760,
-          aspectRatio: `${KNOB.imgW} / ${KNOB.imgH}`,
-          margin: '0 auto',
-          userSelect: 'none',
-          touchAction: 'none',
-          cursor: 'grab',
-          outline: 'none',
-          // El dial entero se enciende un pelín con el volumen.
-          filter: `brightness(${1 + n * 0.18}) saturate(${1 + n * 0.25})`,
-          transition: 'filter 0.12s linear',
-        }}
-      >
-        {/* Fondo: dragón + arco pintado */}
-        <img
-          src="/img/dial-bg.png"
-          alt="Dial dragón"
-          draggable={false}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
-        />
-
-        {/* Halo que late con el volumen y con los graves (--beat). Detrás del knob, rebosa por el borde. */}
-        <div
-          style={{
-            position: 'absolute',
-            left: `${KNOB.cx * 100}%`,
-            top: `${KNOB.cy * 100}%`,
-            width: '34%',
-            aspectRatio: '1 / 1',
-            transform: `translate(-50%, -50%) scale(calc(${1 + n * 0.25} + var(--beat, 0) * 0.35))`,
-            borderRadius: '50%',
-            background: `radial-gradient(circle, ${glowColor} 0%, transparent 68%)`,
-            opacity: `calc(${glow * 0.55} + var(--beat, 0) * 0.4)`,
-            mixBlendMode: 'screen',
-            pointerEvents: 'none',
-            transition: 'background 0.15s linear',
-          }}
-        />
-
-        {/* Arco "lleno" que crece con el volumen: dorado (0-100) + rojo (100-600), encendido sobre el pintado. */}
-        <svg
-          viewBox={`0 0 ${KNOB.imgW} ${KNOB.imgH}`}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'visible' }}
-        >
-          {angle > ARC.aStart && (
-            <path
-              d={arcPath(ARC.aStart, goldEnd, ARC.r)}
-              fill="none"
-              stroke="#f4cf6b"
-              strokeWidth={12}
-              strokeLinecap="round"
-              style={{ filter: `drop-shadow(0 0 ${5 + n * 8}px rgba(244,207,107,0.95))` }}
-            />
-          )}
-          {inRed && (
-            <path
-              d={arcPath(ARC.aMid, angle, ARC.r)}
-              fill="none"
-              stroke={volume > 300 ? '#ff2222' : '#ff5a2a'}
-              strokeWidth={12}
-              strokeLinecap="round"
-              style={{ filter: `drop-shadow(0 0 ${6 + n * 16}px rgba(255,60,20,0.95))` }}
-            />
-          )}
-        </svg>
-
-        {/* La perilla: misma imagen a tamaño completo, rota sobre su centro real. */}
-        <img
-          src="/img/knob.png"
-          alt="Perilla de volumen"
-          draggable={false}
-          style={{
-            position: 'absolute',
-            inset: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain',
-            transform: `rotate(${angle}deg)`,
-            transformOrigin: `${KNOB.cx * 100}% ${KNOB.cy * 100}%`,
-            transition: draggingRef.current ? 'none' : 'transform 0.12s ease-out',
-            filter: `drop-shadow(0 0 ${6 + n * 26}px ${glowColor}) brightness(${1 + n * 0.35})`,
-            pointerEvents: 'none',
-          }}
-        />
-
-        {/* Etiquetas numéricas alrededor del arco */}
-        {KNOB_LABELS.map((v) => {
-          const [lx, ly] = polar(volToAngle(v), LABEL_R);
-          const isBoundary = v === ARC.vMid;
-          const reached = volume >= v;
-          return (
-            <span
-              key={v}
-              style={{
-                position: 'absolute',
-                left: `${(lx / KNOB.imgW) * 100}%`,
-                top: `${(ly / KNOB.imgH) * 100}%`,
-                transform: 'translate(-50%, -50%)',
-                fontSize: 'clamp(9px, 2.2vw, 13px)',
-                fontWeight: isBoundary || v === ARC.vMax ? 800 : 600,
-                fontFamily: 'monospace',
-                color: v > ARC.vMid ? (v > 300 ? '#ff5a4a' : '#ffae5a') : '#f0d68a',
-                textShadow: reached
-                  ? `0 0 7px ${v > ARC.vMid ? 'rgba(255,80,40,0.9)' : 'rgba(240,200,110,0.9)'}`
-                  : '0 1px 2px rgba(0,0,0,0.8)',
-                opacity: reached ? 1 : 0.55,
-                pointerEvents: 'none',
-                transition: 'opacity 0.12s, text-shadow 0.12s',
-              }}
-            >
-              {v}
-            </span>
-          );
-        })}
-
-        {/* Lectura grande del valor, en el espacio libre del pergamino */}
-        <div
-          style={{
-            position: 'absolute',
-            left: '56%',
-            top: '30%',
-            transform: 'translate(-50%, -50%)',
-            textAlign: 'center',
-            pointerEvents: 'none',
-          }}
-        >
-          <div
-            style={{
-              fontSize: 'clamp(14px, 2.4vw, 22px)',
-              fontWeight: 900,
-              fontFamily: "'Cinzel', serif",
-              lineHeight: 1,
-              color: glowColor,
-              textShadow: `0 0 ${10 + n * 26}px ${glowColor}, 0 2px 4px rgba(0,0,0,0.7)`,
-              transform: `scale(calc(1 + var(--beat, 0) * ${0.04 + n * 0.06}))`,
-            }}
-          >
-            {volume}
-          </div>
-          <div
-            style={{
-              fontSize: 'clamp(8px, 2vw, 12px)',
-              letterSpacing: 2,
-              marginTop: 4,
-              fontWeight: 700,
-              color: volume > 300 ? '#ff5a4a' : inRed ? '#ffae5a' : '#caa75f',
-              textShadow: '0 1px 3px rgba(0,0,0,0.8)',
-            }}
-          >
-            {zoneLabel}
-          </div>
-        </div>
-      </div>
-
-      {/* Pie de ayuda */}
-      <p style={{ fontSize: 11, color: '#b89b6a', margin: '6px 0 0', textAlign: 'center' }}>
-        Gira la perilla (arrastra o usa la rueda) · <span style={{ color: '#f0d68a' }}>0–100 normal</span> ·{' '}
-        <span style={{ color: '#ff8a3d' }}>100–600 amplificado (zona roja)</span>
-      </p>
-    </div>
-  );
-}
 
 export default function MusicPlayer() {
   const navigate = useNavigate();
@@ -423,326 +103,74 @@ export default function MusicPlayer() {
   const [profilesOpen, setProfilesOpen] = useState(true);
   const [presetsOpen, setPresetsOpen] = useState(false);
 
-  // --- Referencias a los nodos Web Audio (persisten entre renders, no disparan re-render) ---
-  const audioCtxRef = useRef(null);     // AudioContext: motor del grafo de audio
-  const streamRef = useRef(null);       // MediaStream capturado de la pestaña
-  const eqFiltersRef = useRef([]);      // array de BiquadFilter, uno por banda del EQ
-  const compressorRef = useRef(null);   // DynamicsCompressor: controla la dinámica
-  const reverbRef = useRef(null);       // { convolver, dry, wet }: reverb por convolución
-  const pannerRef = useRef(null);       // StereoPanner: balance L/R
-  const widthGainsRef = useRef(null);   // 4 GainNodes que cruzan canales (ancho estéreo)
-  const masterGainRef = useRef(null);   // ganancia final antes de la salida
-  const analyserRef = useRef(null);     // AnalyserNode: FFT para el visualizador
-  const canvasRef = useRef(null);       // <canvas> donde se dibujan las barras
-  const rafRef = useRef(null);          // id de requestAnimationFrame (loop de dibujo)
-  const bgRef = useRef(null);           // contenedor del fondo: recibe el "latido" (--beat) por CSS var
+  // --- Referencias al motor de audio (persisten entre renders, no disparan re-render) ---
+  const audioCtxRef = useRef(null);   // AudioContext: motor del grafo de audio
+  const streamRef = useRef(null);     // MediaStream capturado de la pestaña
+  const chainRef = useRef(null);      // { effects, analyser, master } — toda la cadena (ver audioChain.js)
+  const canvasRef = useRef(null);     // <canvas> donde se dibuja el visualizador
+  const bgRef = useRef(null);         // contenedor del fondo: recibe el "latido" (--beat) por CSS var
+  const vizRef = useRef(null);        // loop del visualizador (createVisualizerLoop)
 
-  // Ancho estéreo por mezcla M/S simplificada:
-  //   newL = L*(1+w)/2 + R*(1-w)/2
-  //   newR = R*(1+w)/2 + L*(1-w)/2
-  // w=0 → mono · w=1 → estéreo original · w=2 → cancela parte del mid (más ambiente)
-  const applyWidth = (w) => {
-    const g = widthGainsRef.current;
-    if (!g) return;
-    const direct = (1 + w) / 2;
-    const cross = (1 - w) / 2;
-    g.LL.gain.value = direct;
-    g.RR.gain.value = direct;
-    g.LR.gain.value = cross;
-    g.RL.gain.value = cross;
-  };
-
-  // Loop del visualizador "nebulosa": cada frame combina espectro (FFT) +
-  // forma de onda (time-domain) en una sola imagen con curvas espejadas,
-  // gradientes, halo de bajos reactivo y motion-blur por trail semitransparente.
-  const drawVisualizer = () => {
-    const analyser = analyserRef.current;
-    const canvas = canvasRef.current;
-    if (!analyser || !canvas) {
-      rafRef.current = requestAnimationFrame(drawVisualizer);
-      return;
+  // El loop del visualizador se crea una sola vez; lee analyser/canvas por
+  // getters porque no existen hasta que se captura audio.
+  const getViz = () => {
+    if (!vizRef.current) {
+      vizRef.current = createVisualizerLoop({
+        getAnalyser: () => (chainRef.current ? chainRef.current.analyser : null),
+        getCanvas: () => canvasRef.current,
+        onBeat: (bass) => {
+          if (bgRef.current) bgRef.current.style.setProperty('--beat', bass.toFixed(3));
+        },
+      });
     }
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
-    const cy = H / 2;
-
-    // Leemos los dos dominios del Analyser en el mismo buffer length.
-    const bins = analyser.frequencyBinCount;
-    const freq = new Uint8Array(bins);
-    const wave = new Uint8Array(bins);
-    analyser.getByteFrequencyData(freq);
-    analyser.getByteTimeDomainData(wave);
-
-    // Energía de bajos (primer 10% del espectro) → modula brillo y glow.
-    let bass = 0;
-    const bassEnd = Math.max(1, Math.floor(bins * 0.1));
-    for (let i = 0; i < bassEnd; i++) bass += freq[i];
-    bass = bass / (bassEnd * 255); // normalizado 0..1
-
-    // El fondo "late" con la música: pasamos la energía de graves como variable CSS.
-    // Las brasas y el brillo del fondo la usan para reaccionar al ritmo.
-    if (bgRef.current) bgRef.current.style.setProperty('--beat', bass.toFixed(3));
-
-    // Trail: en lugar de borrar el frame entero, pintamos una capa semitransparente
-    // encima. Los píxeles viejos se desvanecen gradualmente → sensación de "respiración".
-    // Tono negro-rojizo para mantener la atmósfera dragón.
-    ctx.fillStyle = 'rgba(15, 5, 3, 0.22)';
-    ctx.fillRect(0, 0, W, H);
-
-    // Halo radial de fondo (brasa) que crece con los bajos.
-    const halo = ctx.createRadialGradient(W / 2, cy, 0, W / 2, cy, W / 2);
-    halo.addColorStop(0, `rgba(255, 90, 0, ${0.10 + bass * 0.40})`);
-    halo.addColorStop(0.6, `rgba(180, 30, 0, ${0.05 + bass * 0.20})`);
-    halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = halo;
-    ctx.fillRect(0, 0, W, H);
-
-    // Solo usamos las primeras ~75% bandas: las agudísimas casi siempre están vacías.
-    const useful = Math.floor(bins * 0.75);
-    const step = W / useful;
-
-    // Dibuja una curva suave (cuadrática) cerrada contra la línea central.
-    // sign = -1 para arriba, +1 para abajo (espejo).
-    const drawCurve = (sign, fill, glowColor) => {
-      const pts = [];
-      for (let i = 0; i < useful; i++) {
-        const v = freq[i] / 255;
-        const h = Math.pow(v, 0.85) * (cy * 0.95); // pequeña curva potencia: realza picos
-        pts.push({ x: i * step, y: cy + sign * h });
-      }
-      ctx.beginPath();
-      ctx.moveTo(0, cy);
-      ctx.lineTo(pts[0].x, pts[0].y);
-      for (let i = 0; i < pts.length - 1; i++) {
-        const p = pts[i];
-        const n = pts[i + 1];
-        const mx = (p.x + n.x) / 2;
-        const my = (p.y + n.y) / 2;
-        ctx.quadraticCurveTo(p.x, p.y, mx, my);
-      }
-      ctx.lineTo(W, cy);
-      ctx.closePath();
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = 18 + bass * 14;
-      ctx.fillStyle = fill;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    };
-
-    // Mitad superior — llamas hacia arriba: amarillo incandescente (puntas) →
-    // naranja → rojo profundo → brasas oscuras cerca del centro.
-    const topGrad = ctx.createLinearGradient(0, 0, 0, cy);
-    topGrad.addColorStop(0,    'rgba(255, 240, 130, 0.95)'); // punta blanca-amarilla (más caliente)
-    topGrad.addColorStop(0.30, 'rgba(255, 160,  30, 0.80)'); // naranja brillante
-    topGrad.addColorStop(0.65, 'rgba(220,  50,   0, 0.55)'); // rojo
-    topGrad.addColorStop(1,    'rgba( 80,  10,   0, 0.05)'); // brasa apagada en la base
-    drawCurve(-1, topGrad, 'rgba(255, 130, 0, 0.75)');
-
-    // Mitad inferior — espejo: brasas en el centro → rojo → naranja → amarillo en la punta.
-    const botGrad = ctx.createLinearGradient(0, cy, 0, H);
-    botGrad.addColorStop(0,    'rgba( 80,  10,   0, 0.05)');
-    botGrad.addColorStop(0.35, 'rgba(220,  50,   0, 0.55)');
-    botGrad.addColorStop(0.70, 'rgba(255, 160,  30, 0.80)');
-    botGrad.addColorStop(1,    'rgba(255, 240, 130, 0.95)');
-    drawCurve(1, botGrad, 'rgba(255, 90, 0, 0.75)');
-
-    // Forma de onda real (no FFT) cruzando el centro con un trazo blanco luminiscente.
-    ctx.beginPath();
-    const wfStep = W / wave.length;
-    for (let i = 0; i < wave.length; i++) {
-      const v = (wave[i] - 128) / 128; // -1..1
-      const y = cy + v * (H * 0.18);
-      if (i === 0) ctx.moveTo(0, y);
-      else ctx.lineTo(i * wfStep, y);
-    }
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = `rgba(255, 245, 200, ${0.6 + bass * 0.35})`; // crema-cálida
-    ctx.shadowColor = 'rgba(255, 180, 60, 0.95)';                  // glow naranja-dorado
-    ctx.shadowBlur = 10;
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    rafRef.current = requestAnimationFrame(drawVisualizer);
+    return vizRef.current;
   };
 
   // Arranca toda la cadena DSP. Pide al usuario compartir una pestaña con audio,
-  // construye el grafo Web Audio y lo conecta a la salida.
-  // Ruta: source → [9 EQ] → compressor → splitter/merger (width) → panner → analyser → master → out
+  // construye el grafo Web Audio (ver audioChain.js) y lo conecta a la salida.
+  // Ruta: source → [eq] → [reverb] → [comp] → [stereo] → analyser → master → out
   const startEqualizer = async () => {
     setEqError('');
     try {
-      // Capturamos pantalla + audio con los procesados del SO desactivados,
-      // para que la música llegue lo más limpia posible.
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 2,
-          sampleRate: 48000,
-          sampleSize: 16,
-          // Silencia la reproducción local de la pestaña capturada: el usuario
-          // solo oye la versión procesada del dragón, no la original a la vez.
-          // Al detener (track.stop) la pestaña recupera su audio sola.
-          suppressLocalAudioPlayback: true,
-        },
-      });
+      const { stream, audioStream, audioTrack } = await captureTabAudio();
 
-      const audioTracks = stream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        stream.getTracks().forEach((t) => t.stop());
-        setEqError(
-          'No se compartió audio. Vuelve a intentarlo y marca la casilla "Compartir audio de la pestaña".'
-        );
-        return;
-      }
-
-      // Reaplicamos restricciones ya sobre el track (algunos navegadores las ignoran en la solicitud).
-      try {
-        await audioTracks[0].applyConstraints({
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 2,
-          suppressLocalAudioPlayback: true,
-        });
-      } catch (_) {}
-
-      // Descartamos el video: solo necesitamos el audio. Ahorra GPU/CPU.
-      stream.getVideoTracks().forEach((t) => t.stop());
-
-      const audioStream = new MediaStream(audioTracks);
       const ctx = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: 48000,
         latencyHint: 'playback',
       });
       const source = ctx.createMediaStreamSource(audioStream);
 
-
-      //Esto es lo más impresionante de tu app. Conecta "cajitas" de sonido en cadena (como pedales de guitarra):
-      // --- 1) Ecualizador gráfico de 9 bandas (1 BiquadFilter por banda) ---
-      const filters = EQ_BANDS.map((band, i) => {
-        const f = ctx.createBiquadFilter();
-        f.type = band.type;
-        f.frequency.value = band.freq;
-        if (band.type === 'peaking') f.Q.value = 1.41; // ancho ≈ 1/2 octava
-        f.gain.value = eqGains[i];//aqui  entra la IA con sus ganancias predecidas, o el usuario si las ajusta a mano. Si el efecto está en Mute, el gain se pone a 0 (curva plana); si está en Solo, se mantiene el valor pero los demás efectos se silencian.
-        return f;
-      });
-
-      // --- 2) Compresor dinámico ---
-      // Reduce los picos que superan el threshold con la relación ratio:1.
-      // knee=30 → transición suave alrededor del umbral; attack/release típicos para música.
-      const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.value = compThreshold;
-      compressor.ratio.value = compRatio;
-      compressor.knee.value = 30;
-      compressor.attack.value = 0.003;
-      compressor.release.value = 0.25;
-
-      // --- 2b) Reverb por convolución (simple) ---
-      // La señal se divide en dos ramas paralelas: seca (dry) y reverberada (wet).
-      // El slider de mezcla cruza las dos ganancias; el impulso es ruido con
-      // caída exponencial generado al vuelo (makeReverbImpulse).
-      const convolver = ctx.createConvolver();
-      convolver.buffer = makeReverbImpulse(ctx, reverbDecay);
-      const dryGain = ctx.createGain();
-      const wetGain = ctx.createGain();
-      const revOn = effectActive('reverb');
-      dryGain.gain.value = revOn ? 1 - (reverbMix / 100) * 0.5 : 1; // la seca nunca baja de 0.5
-      wetGain.gain.value = revOn ? reverbMix / 100 : 0;
-
-      // --- 3) Ancho estéreo (cross-mix L↔R) ---
-      // Separamos canales con Splitter, los mezclamos con 4 GainNodes y los volvemos a unir.
-      const splitter = ctx.createChannelSplitter(2);
-      const merger = ctx.createChannelMerger(2);
-      const gLL = ctx.createGain();
-      const gRR = ctx.createGain();
-      const gLR = ctx.createGain();
-      const gRL = ctx.createGain();
-
-      // --- 4) Paneo: balance simple izquierda/derecha (-1 a 1) ---
-      const panner = ctx.createStereoPanner();
-      panner.pan.value = pan;
-
-      // --- 5) Analyser: lee la señal en paralelo y alimenta el visualizador.
-      // fftSize=1024 → 512 bins, curva mucho más suave que con 256.
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.82;
-
-      // --- 6) Master gain: volumen final antes de la salida ---
-      const masterGain = ctx.createGain();
-      masterGain.gain.value = volume / 100;
-
-      // --- Cableado: source → EQ → (dry ∥ convolver→wet) → compressor → ... ---
-      source.connect(filters[0]);
-      for (let i = 0; i < filters.length - 1; i++) {
-        filters[i].connect(filters[i + 1]);
-      }
-      const lastFilter = filters[filters.length - 1];
-      lastFilter.connect(dryGain);
-      lastFilter.connect(convolver);
-      convolver.connect(wetGain);
-      dryGain.connect(compressor);
-      wetGain.connect(compressor);
-      compressor.connect(splitter);
-
-      // Cross-mix del ancho estéreo
-      splitter.connect(gLL, 0);
-      splitter.connect(gLR, 0);
-      splitter.connect(gRL, 1);
-      splitter.connect(gRR, 1);
-
-      gLL.connect(merger, 0, 0);
-      gRL.connect(merger, 0, 0);
-      gLR.connect(merger, 0, 1);
-      gRR.connect(merger, 0, 1);
-
-      merger.connect(panner);
-      panner.connect(analyser);
-      analyser.connect(masterGain);
-      masterGain.connect(ctx.destination);
-
-      // Aplicamos el ancho inicial según el estado actual del slider
-      const direct = (1 + width) / 2;
-      const cross = (1 - width) / 2;
-      gLL.gain.value = direct;
-      gRR.gain.value = direct;
-      gLR.gain.value = cross;
-      gRL.gain.value = cross;
+      // Cada efecto recibe sus parámetros actuales y su estado Solo/Mute.
+      const chain = buildChain(ctx, source, {
+        eq:     { gains: eqGains },
+        reverb: { mix: reverbMix, decay: reverbDecay },
+        comp:   { threshold: compThreshold, ratio: compRatio },
+        stereo: { pan, width },
+        volume: { volume, muted: muted.volume },
+      }, effectActive);
 
       // Guardamos referencias para poder modificar los nodos sin reconstruir el grafo
       audioCtxRef.current = ctx;
       streamRef.current = stream;
-      eqFiltersRef.current = filters;
-      compressorRef.current = compressor;
-      reverbRef.current = { convolver, dry: dryGain, wet: wetGain };
-      pannerRef.current = panner;
-      widthGainsRef.current = { LL: gLL, RR: gRR, LR: gLR, RL: gRL };
-      masterGainRef.current = masterGain;
-      analyserRef.current = analyser;
+      chainRef.current = chain;
 
       // Si el usuario detiene la compartición desde el navegador, paramos limpiamente.
-      audioTracks[0].addEventListener('ended', () => stopEqualizer());
+      audioTrack.addEventListener('ended', () => stopEqualizer());
 
       setEqActive(true);
-      if (visualMode === 'full') {
-        rafRef.current = requestAnimationFrame(drawVisualizer);
-      }
+      if (visualMode === 'full') getViz().start();
     } catch (err) {
-      setEqError('No se pudo iniciar el ecualizador: ' + err.message);
+      setEqError(
+        err.code === NO_AUDIO
+          ? 'No se compartió audio. Vuelve a intentarlo y marca la casilla "Compartir audio de la pestaña".'
+          : 'No se pudo iniciar el ecualizador: ' + err.message
+      );
     }
   };
 
   // Libera todos los recursos: animación, tracks de captura, AudioContext y refs.
   const stopEqualizer = () => {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
+    if (vizRef.current) vizRef.current.stop();
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -751,75 +179,50 @@ export default function MusicPlayer() {
       audioCtxRef.current.close();
       audioCtxRef.current = null;
     }
-    eqFiltersRef.current = [];
-    compressorRef.current = null;
-    reverbRef.current = null;
-    pannerRef.current = null;
-    widthGainsRef.current = null;
-    masterGainRef.current = null;
-    analyserRef.current = null;
+    chainRef.current = null;
 
     if (bgRef.current) bgRef.current.style.setProperty('--beat', '0');
-
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const cctx = canvas.getContext('2d');
-      cctx.fillStyle = '#0c0503';
-      cctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+    if (canvasRef.current) paintIdle(canvasRef.current);
     setEqActive(false);
   };
 
-  //La sincronización estado→audio es clave para que los controles sean responsivos sin reconstruir la cadena DSP:
   // --- Sincronización estado React → nodos Web Audio ---
   // Cada vez que el usuario mueve un slider (o pulsa ↺), propagamos el valor
-  // directamente al nodo correspondiente, sin reconstruir la cadena.
+  // directamente al efecto correspondiente (update de su módulo), sin
+  // reconstruir la cadena. Cada efecto recibe también su estado Solo/Mute:
+  // si está inactivo, su update() lo deja en neutro.
   useEffect(() => {
-    const on = effectActive('eq');                 // si está off → curva plana (0 dB)
-    eqFiltersRef.current.forEach((f, i) => {
-      if (f) f.gain.value = on ? eqGains[i] : 0;//mueve el filtro real según el estado del slider, o lo silencia si el efecto está en Mute o si otro efecto está en Solo. El solo de EQ no silencia el volumen master, para que puedas escuchar la diferencia entre con/sin EQ sin perder el nivel de salida.
-    });
+    const chain = chainRef.current;
+    if (chain) equalizer.update(chain.effects.eq, { gains: eqGains }, effectActive('eq'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eqGains, muted, solo]);// se ejecuta cuando cambian las ganancias del EQ, o cuando se activa el Mute/Solo de cualquier efecto (porque el estado de los demás efectos afecta si este se aplica o no).
+  }, [eqGains, muted, solo]);
   useEffect(() => {
-    const on = effectActive('comp');               // si está off → threshold 0 / ratio 1 (sin compresión)
-    if (compressorRef.current) {
-      compressorRef.current.threshold.value = on ? compThreshold : 0;
-      compressorRef.current.ratio.value = on ? compRatio : 1;
-    }
+    const chain = chainRef.current;
+    if (chain) compressor.update(chain.effects.comp, { threshold: compThreshold, ratio: compRatio }, effectActive('comp'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compThreshold, compRatio, muted, solo]);
   useEffect(() => {
-    const r = reverbRef.current;
-    if (!r) return;
-    const on = effectActive('reverb');           // si está off → 100% señal seca
-    r.dry.gain.value = on ? 1 - (reverbMix / 100) * 0.5 : 1;
-    r.wet.gain.value = on ? reverbMix / 100 : 0;
+    const chain = chainRef.current;
+    if (chain) reverb.update(chain.effects.reverb, { mix: reverbMix }, effectActive('reverb'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reverbMix, muted, solo]);
   useEffect(() => {
     // Cambiar la duración regenera el impulso (operación puntual, no por frame).
-    const r = reverbRef.current;
-    if (r && audioCtxRef.current) {
-      r.convolver.buffer = makeReverbImpulse(audioCtxRef.current, reverbDecay);
-    }
+    const chain = chainRef.current;
+    if (chain && audioCtxRef.current) reverb.setDecay(audioCtxRef.current, chain.effects.reverb, reverbDecay);
   }, [reverbDecay]);
   useEffect(() => {
-    const on = effectActive('stereo');             // si está off → pan centrado y ancho normal
-    if (pannerRef.current) pannerRef.current.pan.value = on ? pan : 0;
-    applyWidth(on ? width : 1);
+    const chain = chainRef.current;
+    if (chain) stereo.update(chain.effects.stereo, { pan, width }, effectActive('stereo'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pan, width, muted, solo]);
   useEffect(() => {
     // Rampa exponencial corta (~20 ms) para evitar clicks al saltar de volumen.
     // El volumen solo se silencia con su propio Mute; el solo de otros efectos no lo apaga.
-    if (masterGainRef.current && audioCtxRef.current) {
-      const target = muted.volume ? 0 : volume / 100;
-      masterGainRef.current.gain.setTargetAtTime(target, audioCtxRef.current.currentTime, 0.02);
-    }
+    const chain = chainRef.current;
+    if (chain && audioCtxRef.current) masterVolume.update(audioCtxRef.current, chain.master, { volume }, muted.volume);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [volume, muted]);
-
 
   // Trae la lista de perfiles del usuario (para poder cambiar entre ellos en vivo).
   const loadProfiles = async () => {
@@ -881,21 +284,15 @@ export default function MusicPlayer() {
   // Arranca o pausa el visualizador canvas cuando cambia el modo visual.
   useEffect(() => {
     if (!eqActive) return;
-    if (visualMode === 'simple') {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    } else if (!rafRef.current) {
-      rafRef.current = requestAnimationFrame(drawVisualizer);
-    }
+    if (visualMode === 'simple') getViz().stop();
+    else getViz().start();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visualMode, eqActive]);
 
   // Cleanup al desmontar: corta la animación, libera el stream y cierra el AudioContext.
   useEffect(() => {
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (vizRef.current) vizRef.current.stop();
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
       if (audioCtxRef.current) audioCtxRef.current.close();
     };
@@ -1018,119 +415,6 @@ export default function MusicPlayer() {
 
   return (
     <div className={visualMode === 'full' ? 'dragon-bg' : 'dragon-simple'} ref={bgRef} style={{ '--beat': 0 }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap');
-        @keyframes fadeSlideDown {
-          from { opacity: 0; transform: translateY(-6px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes dragonShift {
-          0%, 100% { background-position: 0% 0%, 100% 100%, 0% 50%; }
-          50%      { background-position: 100% 100%, 0% 0%, 100% 50%; }
-        }
-        @keyframes emberFloat {
-          0%   { transform: translateY(0) scale(1);   opacity: 0; }
-          15%  { opacity: 0.9; }
-          100% { transform: translateY(-120vh) scale(0.4); opacity: 0; }
-        }
-        @keyframes dragonSway {
-          0%, 100% { transform: translateX(-50%) rotate(-3deg); }
-          50%      { transform: translateX(-50%) rotate(3deg); }
-        }
-        @keyframes titleGlow {
-          0%, 100% { text-shadow: 0 0 10px rgba(232,195,106,0.5), 0 0 22px rgba(180,30,0,0.4); }
-          50%      { text-shadow: 0 0 18px rgba(255,180,60,0.9), 0 0 40px rgba(220,40,0,0.7); }
-        }
-        .dragon-bg {
-          min-height: 100vh;
-          padding: 1px 0 40px;
-          position: relative;
-          overflow: hidden;
-          background:
-            radial-gradient(circle at 20% 15%, rgba(120,12,20,0.55) 0%, transparent 45%),
-            radial-gradient(circle at 82% 80%, rgba(60,6,10,0.6) 0%, transparent 50%),
-            linear-gradient(135deg, #0a0405 0%, #18080a 50%, #0a0405 100%);
-          background-size: 200% 200%, 200% 200%, 200% 200%;
-          animation: dragonShift 22s ease-in-out infinite;
-          font-family: 'Cinzel', serif;
-        }
-        /* 龙 — dragón gigante, marca de agua que se mece muy lento detrás de todo. */
-        .dragon-watermark {
-          position: absolute;
-          top: 6%;
-          left: 50%;
-          transform: translateX(-50%);
-          font-size: 46vw;
-          line-height: 1;
-          color: rgba(232,195,106,0.04);
-          pointer-events: none;
-          user-select: none;
-          z-index: 0;
-          animation: dragonSway 16s ease-in-out infinite;
-        }
-        /* Brasas/chispas ascendentes (como las que lanza el dragón). */
-        .ember {
-          position: absolute;
-          bottom: -10px;
-          width: 4px; height: 4px;
-          border-radius: 50%;
-          background: radial-gradient(circle, #ffd27a 0%, #ff5a00 60%, transparent 70%);
-          box-shadow: 0 0 8px rgba(255,120,0,0.8);
-          pointer-events: none;
-          z-index: 1;
-          animation: emberFloat linear infinite;
-          /* Brillan más fuerte cuanto más pegan los graves (--beat 0..1). */
-          filter: brightness(calc(0.7 + var(--beat, 0) * 2.2));
-        }
-        /* Resplandor central que late con el bajo: crece y se enciende al ritmo. */
-        .dragon-pulse {
-          position: absolute;
-          top: 0; left: 0; right: 0; bottom: 0;
-          pointer-events: none;
-          z-index: 1;
-          background: radial-gradient(circle at 50% 42%,
-            rgba(255,90,0,0.55) 0%,
-            rgba(180,20,0,0.28) 28%,
-            transparent 60%);
-          opacity: calc(var(--beat, 0) * 0.9);
-          transform: scale(calc(1 + var(--beat, 0) * 0.5));
-          transition: opacity 90ms linear, transform 90ms linear;
-        }
-        /* El dragón de fondo también se enciende suavemente con el ritmo. */
-        .dragon-watermark {
-          color: rgba(232,195,106, calc(0.04 + var(--beat, 0) * 0.12)) !important;
-        }
-        /* El título conserva su brillo base (titleGlow) y además PULSA con el bajo:
-           drop-shadow no choca con la animación de text-shadow, así se suman. */
-        .dragon-title {
-          filter: drop-shadow(0 0 calc(var(--beat, 0) * 34px) rgba(255,150,30, calc(var(--beat, 0) * 0.95)));
-          transform: scale(calc(1 + var(--beat, 0) * 0.05));
-          transition: filter 90ms linear, transform 90ms linear;
-        }
-        /* El subtítulo rojo 龙之音 también late con el ritmo. */
-        .dragon-sub {
-          filter: drop-shadow(0 0 calc(var(--beat, 0) * 24px) rgba(200,30,20, calc(var(--beat, 0) * 0.95)));
-          transform: scale(calc(1 + var(--beat, 0) * 0.04));
-          transition: filter 90ms linear, transform 90ms linear;
-        }
-        .dragon-content { position: relative; z-index: 2; max-width: 820px; margin: 0 auto; padding: 0 16px; }
-
-        /* ── Modo simple: sin animaciones, sin partículas, bajo consumo ── */
-        .dragon-simple {
-          min-height: 100vh;
-          padding: 1px 0 40px;
-          background: #0d0507;
-          background-image:
-            radial-gradient(circle at 50% 20%, rgba(100,10,16,0.45) 0%, transparent 55%),
-            radial-gradient(circle at 80% 85%, rgba(40,5,8,0.5) 0%, transparent 45%);
-          font-family: 'Cinzel', serif;
-          color: #f0e6d2;
-        }
-        .dragon-simple .dragon-content { position: relative; z-index: 2; max-width: 820px; margin: 0 auto; padding: 0 16px; }
-        .dragon-simple .dragon-title { animation: none !important; filter: none !important; transform: none !important; }
-        .dragon-simple .dragon-sub   { animation: none !important; filter: none !important; transform: none !important; }
-      `}</style>
-
       {visualMode === 'full' && (
         <>
           <div className="dragon-watermark">龙</div>

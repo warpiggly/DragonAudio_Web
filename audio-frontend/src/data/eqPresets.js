@@ -2,7 +2,7 @@
 //  Ecualizaciones temáticas ("presets") para el MusicPlayer.
 //
 //  Son las curvas de ai/data/raw/Eqs_audio.json, pero adaptadas a las
-//  9 bandas reales del ecualizador del frontend (EQ_BANDS en MusicPlayer.js):
+//  9 bandas reales del ecualizador del frontend (EQ_BANDS en src/audio/effects/equalizer.js):
 //      31 · 63 · 125 · 250 · 500 · 1k · 2k · 4k · 8k
 //
 //  El JSON original trae 10 puntos (31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k).
